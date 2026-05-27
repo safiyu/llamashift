@@ -783,7 +783,7 @@ body::before {
 
 .models-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    grid-template-columns: repeat(5, 1fr);
     gap: 1.5rem;
 }
 
@@ -2071,4 +2071,3 @@ body::before {
     color: var(--amd-neon);
     border-color: var(--amd-neon);
 }
-
