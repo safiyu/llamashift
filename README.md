@@ -1,26 +1,47 @@
-# 🦙 LlamaShift
+# LlamaShift
 
-**Universal LLM Workstation Manager** — A web-based control panel for managing multiple local LLM models with seamless switching between single-port and multi-port modes.
+**Llama Model Manager** — A powerful, GPU-aware web-based control panel for managing multiple local Llama models with seamless switching between single-port and multi-port modes.
 
-![Architecture](https://img.shields.io/badge/Python-3.10%2B-green)
+![Python](https://img.shields.io/badge/Python-3.10%2B-green)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-lightgrey)
 
-## ✨ Features
+---
+
+## Overview
+
+LlamaShift is a comprehensive LLM model management platform that enables users to run, switch between, and monitor multiple local Llama models through an intuitive web interface. Built on Flask and powered by llama.cpp, LlamaShift provides seamless model switching with GPU acceleration support for both NVIDIA CUDA and AMD ROCm devices.
+
+### Key Capabilities
+
+- **Single-Port Mode**: Run one model at a time on a shared port — ideal for integration with Open WebUI and other LLM frontends that expect a single endpoint.
+- **Multi-Port Mode**: Host multiple models simultaneously, each on its own dedicated port, enabling parallel inference workloads.
+- **GPU-Aware Management**: Auto-detects NVIDIA CUDA and AMD ROCm GPUs, with configurable GPU layer offloading for optimal performance.
+- **Real-Time Monitoring**: Live system stats, GPU memory usage, temperature, and utilization metrics in a dark-themed dashboard.
+- **One-Click Model Switching**: Start, stop, or switch between models instantly from the web interface.
+- **Live Log Streaming**: View model inference logs directly in the browser for real-time monitoring.
+- **MCP Integration**: Model Context Protocol support for AI agent workflows.
+- **Smart Auto-Restart**: Cross-platform service management with automatic recovery (systemd on Linux, Task Scheduler on Windows, Docker restart policies).
+- **OpenAI-Compatible API**: Full OpenAI-style endpoints for easy integration with existing tools and applications.
+
+![Dashboard Screenshot](static/Screenshot.png)
+
+## Features
 
 | Feature | Description |
 |---------|-------------|
-| **Single-Port Mode** | One model at a time on shared port (ideal for Open WebUI) |
-| **Multi-Port Mode** | Multiple models simultaneously on different ports |
-| **GPU-Aware** | Auto-detects NVIDIA CUDA and AMD ROCm, handles GPU conflicts |
-| **Real-Time Monitoring** | System stats, GPU telemetry, model status dashboard |
-| **One-Click Switching** | Start, stop, switch models instantly |
-| **Live Log Viewer** | Stream model logs directly in the UI |
-| **MCP Integration** | Model Context Protocol support for AI agents |
-| **Smart Restart** | Cross-platform auto-restart (systemd / Docker / Task Scheduler) |
-| **Web UI** | Dark-themed dashboard at `http://localhost:8002` |
+| Single-Port Mode | Run one model at a time on shared port — ideal for Open WebUI integration |
+| Multi-Port Mode | Host multiple models simultaneously, each on its own dedicated port |
+| GPU-Aware Management | Auto-detects NVIDIA CUDA and AMD ROCm, configurable GPU layer offloading |
+| Real-Time Monitoring | System stats, GPU memory/temperature/utilization, model status dashboard |
+| One-Click Switching | Start, stop, or switch models instantly from the web interface |
+| Live Log Streaming | View model inference logs directly in the browser |
+| MCP Integration | Model Context Protocol support for AI agent workflows |
+| Smart Auto-Restart | Cross-platform service management (systemd / Task Scheduler / Docker) |
+| OpenAI-Compatible API | Full OpenAI-style endpoints for easy tool integration |
+| Dark Theme UI | Modern, responsive web interface at `http://localhost:8002` |
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────┐    ┌───────────────────────┐    ┌─────────────────┐
@@ -34,14 +55,16 @@
                        └───────────────────────┘
 ```
 
+![Dashboard Screenshot](static/Screenshot.png)
+
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
 ### Required (All Platforms)
 
 | Dependency | Minimum Version | Recommended | Purpose |
-|------------|----------------|-------------|---------|
+|------------|-----------------|-------------|---------|
 | **Python** | 3.10 | 3.11+ | Backend server runtime |
 | **pip** | 23.0+ | Latest | Python package manager |
 | **llama.cpp server** | Any recent build | Latest release | LLM inference engine |
@@ -52,7 +75,7 @@
 The installers handle these automatically:
 
 | Package | Minimum Version | Purpose |
-|---------|----------------|---------|
+|---------|-----------------|---------|
 | `flask` | >= 3.0.0 | Web server + API |
 | `requests` | >= 2.28.0 | HTTP client for model health checks |
 | `psutil` | >= 5.9.0 | System resource monitoring |
@@ -70,7 +93,7 @@ The installers handle these automatically:
 ### Access Requirements
 
 | Platform | Access Level | Why |
-|----------|-------------|-----|
+|----------|--------------|-----|
 | **Linux** | `sudo` / root | Create systemd service, bind privileged ports |
 | **macOS** | User (admin for launchd) | Launch agent/service registration |
 | **Windows** | Administrator | Task Scheduler, NSSM service, UAC prompt |
@@ -78,7 +101,7 @@ The installers handle these automatically:
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Option A: Interactive Installer (Recommended)
 
@@ -155,7 +178,7 @@ sudo bash install_service.sh     # Creates systemd service
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 ### config.json
 
@@ -218,7 +241,7 @@ curl -X PATCH http://localhost:8002/api/models \
 
 ---
 
-## 🔌 API Endpoints
+## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -239,7 +262,7 @@ curl -X PATCH http://localhost:8002/api/models \
 
 ---
 
-## 📁 File Structure
+## File Structure
 
 ```
 llama-switcher/
@@ -266,7 +289,7 @@ llama-switcher/
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Errors and Solutions
 
@@ -353,7 +376,7 @@ cmake --build . --config Release
 3. Enter that directory path when prompted
 4. Or edit `config.json` manually after installation and add model entries
 
-#### `Permission denied` when binding port 8002 or 9000
+#### `Permission denied` when binding port 8002 or 9000`
 
 **Cause:** Ports below 1024 require root. Port 8002 shouldn't, but 9000 could be in use.
 
@@ -488,7 +511,7 @@ taskkill /PID <PID> /F
 
 ---
 
-## 🔒 Security Notes
+## Security Notes
 
 | Concern | Details | Mitigation |
 |---------|---------|------------|
@@ -500,7 +523,7 @@ taskkill /PID <PID> /F
 
 ---
 
-## 📊 System Requirements
+## System Requirements
 
 ### Minimum
 
@@ -535,7 +558,7 @@ taskkill /PID <PID> /F
 
 ---
 
-## 🔄 Service Management
+## Service Management
 
 ### Linux (systemd)
 
@@ -581,7 +604,7 @@ docker compose logs -f
 
 ---
 
-## 🧪 Development
+## Development
 
 ### Running in Development Mode
 
@@ -625,7 +648,7 @@ def api_foo(self):
 
 ---
 
-## 📝 Changelog
+## Changelog
 
 ### Latest
 - **Installer improvements**: Directory-based model path input (instead of single file), GGUF scanner
@@ -635,7 +658,7 @@ def api_foo(self):
 
 ---
 
-## 📄 License
+## License
 
 **MIT License** — See [LICENSE](LICENSE) for details.
 
