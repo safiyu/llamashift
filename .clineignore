@@ -1,7 +1,0 @@
-.aider.tags.cache.v4/
-.aider.chat.history.md
-.aider.input.history
-__pycache__/
-*.pyc
-server_backup.py
-server_fixed.py
