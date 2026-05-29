@@ -1,0 +1,452 @@
+/* ======================================== */
+/* Model Cards & GPU Cards                  */
+/* ======================================== */
+
+/* Models Grid Container */
+.models-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 1rem;
+}
+
+/* Model Card Section */
+.model-card-section {
+    margin-top: 2rem;
+}
+
+/* Model Cards Grid (legacy) */
+.model-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+}
+
+/* Model Card - enhanced layout */
+.model-card {
+    background: var(--surface-base);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 0.8rem;
+    transition: var(--transition-smooth);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: auto;
+}
+
+.model-card.running-card {
+    border-color: rgba(0, 255, 136, 0.2);
+    box-shadow: 0 0 20px rgba(0, 255, 136, 0.05);
+}
+
+.model-card.running-card:before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--status-online), transparent);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+/* Switching card state (single port mode - ready to switch) */
+.model-card.switching-card {
+    border-color: rgba(0, 243, 255, 0.15);
+    box-shadow: 0 0 15px rgba(0, 243, 255, 0.03);
+}
+
+.model-card.switching-card:before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--amd-neon), transparent);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    animation: switching-pulse 2s ease-in-out infinite;
+}
+
+@keyframes switching-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.model-card:hover {
+    border-color: var(--glass-border-glow);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-card);
+}
+
+.model-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0.4rem;
+}
+
+.model-card-title {
+    font-size: 0.9rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1.2;
+    flex: 1;
+    margin-right: 0.5rem;
+}
+
+.model-card-header-actions {
+    display: flex;
+    gap: 0.3rem;
+    flex-shrink: 0;
+}
+
+/* GPU Card */
+.gpu-card {
+    background: var(--surface-base);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 1.2rem;
+    transition: var(--transition-smooth);
+}
+
+.gpu-card:hover {
+    border-color: var(--glass-border-glow);
+}
+
+.gpu-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.gpu-card-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.gpu-card-title.amd {
+    color: var(--amd-neon);
+}
+
+.gpu-card-title.nvidia {
+    color: var(--nvidia-neon);
+}
+
+/* Model Card Meta Badges & Specs */
+.model-meta-row {
+    display: flex;
+    gap: 0.4rem;
+    margin: 0.3rem 0;
+    flex-wrap: wrap;
+}
+
+.meta-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+}
+
+.size-badge {
+    color: var(--text-primary);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.ctx-badge {
+    color: var(--nvidia-neon);
+    border-color: rgba(118, 185, 0, 0.15);
+    background: rgba(118, 185, 0, 0.02);
+}
+
+.hw-badge.amd-hw {
+    color: var(--amd-neon);
+    border-color: rgba(0, 243, 255, 0.15);
+    background: rgba(0, 243, 255, 0.02);
+}
+
+.hw-badge.dual-hw {
+    color: var(--nvidia-neon);
+    border-color: rgba(118, 185, 0, 0.15);
+    background: rgba(118, 185, 0, 0.02);
+}
+
+.model-desc {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.4rem;
+    line-height: 1.3;
+    min-height: 2.4rem;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* Model Card Footer */
+.model-card-footer {
+    margin-top: auto;
+    padding-top: 0.4rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.03);
+    display: flex;
+    gap: 0.5rem;
+}
+
+/* Config gear button in model card */
+.btn-config {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.btn-config:hover {
+    color: var(--amd-neon);
+    border-color: var(--amd-neon);
+}
+
+/* Model Card Actions - bottom row */
+.model-card-footer-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: auto;
+    padding-top: 1rem;
+}
+
+/* Model name wrapper */
+.model-name-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    flex: 1;
+}
+
+.model-name {
+    font-size: 0.9rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.model-endpoint-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    background: rgba(0, 243, 255, 0.04);
+    border: 1px solid rgba(0, 243, 255, 0.1);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: var(--transition-quick);
+    user-select: none;
+    width: fit-content;
+}
+
+.model-endpoint-badge:hover {
+    background: rgba(0, 243, 255, 0.08);
+    border-color: rgba(0, 243, 255, 0.2);
+    color: var(--text-primary);
+}
+
+/* Model status pills */
+.model-status-pill {
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+}
+
+.model-status-pill.status-stopped {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    color: var(--text-muted);
+}
+
+.model-status-pill.status-running {
+    background: rgba(0, 255, 136, 0.08);
+    border: 1px solid rgba(0, 255, 136, 0.2);
+    color: var(--status-online);
+}
+
+.model-status-pill.status-loading {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    color: var(--amber-neon);
+}
+
+.model-status-pill.status-switching {
+    background: rgba(0, 243, 255, 0.08);
+    border: 1px solid rgba(0, 243, 255, 0.2);
+    color: var(--amd-neon);
+}
+
+/* Command preview */
+.model-command-preview {
+    background: var(--bg-deep);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 0.4rem 0.6rem;
+    font-size: 0.6rem;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 0.4rem;
+    overflow-x: auto;
+    white-space: pre;
+}
+
+/* Uptime row */
+.telemetry-highlight {
+    color: var(--status-online);
+    font-family: var(--font-mono);
+    font-weight: 600;
+}
+
+/* ======================================== */
+/* Start/Stop buttons (model card controls) */
+/* ======================================== */
+
+.btn-start,
+.btn-stop {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--glass-border);
+    cursor: pointer;
+    transition: var(--transition-quick);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.btn-start {
+    background: rgba(0, 255, 136, 0.1);
+    color: var(--status-online);
+    border-color: rgba(0, 255, 136, 0.2);
+}
+
+.btn-start:hover {
+    background: rgba(0, 255, 136, 0.2);
+    box-shadow: 0 0 12px rgba(0, 255, 136, 0.2);
+    border-color: var(--status-online);
+}
+
+/* Disabled start button (single port mode - switching state) */
+.btn-start.btn-start-disabled {
+    background: rgba(0, 243, 255, 0.05);
+    color: var(--text-muted);
+    border-color: var(--glass-border);
+    cursor: not-allowed;
+}
+
+.btn-start.btn-start-disabled:hover {
+    background: rgba(0, 243, 255, 0.05);
+    box-shadow: none;
+    border-color: var(--glass-border);
+}
+
+.btn-stop {
+    background: rgba(255, 51, 102, 0.1);
+    color: var(--rose-neon);
+    border-color: rgba(255, 51, 102, 0.2);
+}
+
+.btn-stop:hover {
+    background: rgba(255, 51, 102, 0.2);
+    box-shadow: 0 0 12px rgba(255, 51, 102, 0.2);
+    border-color: var(--rose-neon);
+}
+
+.btn-logs {
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-muted);
+    border-color: var(--glass-border);
+}
+
+.btn-logs:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+    border-color: var(--glass-border-glow);
+}
+
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-secondary);
+    border-color: var(--glass-border);
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+    border-color: var(--glass-border-glow);
+}
+
+/* Model Card Actions - bottom row (new layout) */
+.model-card-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: auto;
+    padding-top: 0.4rem;
+}
+
+.model-card-actions .btn {
+    flex: 1;
+    font-size: 0.65rem;
+    padding: 0.5rem 0.6rem;
+}
+
+/* Config button in model card actions */
+.model-card-actions .btn-config {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 0 0.8rem;
+}
+
+.model-card-actions .btn-logs {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 0 0.8rem;
+}
+
+.model-card-actions .btn-start {
+    flex: 1;
+}
+
+/* Config gear button in model card (legacy) */
+.btn-config {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.btn-config:hover {
+    color: var(--amd-neon);
+    border-color: var(--amd-neon);
+}

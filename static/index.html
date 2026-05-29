@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LlamaShift - Shift Models Seamlessly</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="stylesheet" href="variables.css">
+    <link rel="stylesheet" href="base.css">
+    <link rel="stylesheet" href="pin-security.css">
+    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="cards.css">
+    <link rel="stylesheet" href="playground.css">
+    <link rel="stylesheet" href="config.css">
+    <link rel="stylesheet" href="footer.css">
+</head>
+<body>
+    <div class="glow-overlay"></div>
+    
+    <!-- Top Cyberpunk Bar -->
+    <header class="nexus-header">
+        <div class="logo-area">
+            <div class="nexus-logo">
+                <img src="logo.png" alt="LlamaShift Logo" class="nexus-logo-img">
+                <span class="nexus-title"><span class="title-llama">Llama</span><span class="title-shift">Shift</span></span>
+            </div>
+                <span class="nexus-subtitle">Shift Models Seamlessly</span>
+        </div>
+        
+        <!-- System Time -->
+        <div class="system-status-bar">
+            <div class="metric-pill" id="uptime-pill" title="Local system time">
+                <i class="fa-solid fa-clock"></i>
+                <span id="system-time">00:00:00</span>
+            </div>
+        </div>
+
+        <!-- Mode Toggle -->
+        <div class="mode-toggle-area">
+            <span class="mode-label">MODE:</span>
+            <label class="mode-switch">
+                <input type="checkbox" id="mode-toggle">
+                <span class="mode-slider"></span>
+            </label>
+            <span class="mode-label mode-label-active" id="mode-display">SINGLE</span>
+        </div>
+
+        <div class="header-actions">
+            <button id="btn-restart-service" class="btn btn-warning btn-glow" title="Restart LlamaShift system service (stops all models first)">
+                <i class="fa-solid fa-arrow-rotate-right"></i>
+            </button>
+            <button id="btn-start-all" class="btn btn-success btn-glow" title="Start all stopped models (multi-port mode)">
+                <i class="fa-solid fa-play"></i>
+            </button>
+            <button id="btn-stop-all" class="btn btn-danger btn-glow" title="Terminate all running llama-servers">
+                <i class="fa-solid fa-power-off"></i>
+            </button>
+            <button id="btn-export-models" class="btn btn-info btn-glow" title="Export model configurations to JSON">
+                <i class="fa-solid fa-download"></i>
+            </button>
+            <button id="btn-add-model" class="btn btn-success btn-glow" title="Add a new model configuration">
+                <i class="fa-solid fa-plus"></i>
+            </button>
+            <button id="btn-refresh" class="btn btn-secondary" title="Force refresh system state">
+                <i class="fa-solid fa-arrows-rotate"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container"></div>
+
+    <main class="nexus-container">
+        <!-- System Telemetry Gauges - Square Tiles Layout -->
+        <section class="system-telemetry-section">
+            <div class="telemetry-grid" id="telemetry-grid">
+                <!-- CPU Tile -->
+                <div class="telemetry-tile cpu-tile" id="tile-cpu">
+                    <div class="tile-header">
+                        <div class="tile-label">
+                            <div class="tile-icon"><i class="fa-solid fa-microchip"></i></div>
+                            <span class="tile-title">CPU</span>
+                        </div>
+                        <span class="tile-badge" id="cpu-model">Host Processor</span>
+                    </div>
+                    <div class="tile-body">
+                        <div class="circular-gauge">
+                            <div class="gauge-ring"></div>
+                            <div class="gauge-ring-progress" id="cpu-gauge-progress" style="transform: rotate(0deg);"></div>
+                            <div class="gauge-center">
+                                <span class="gauge-value" id="cpu-value">0.0</span>
+                                <span class="gauge-unit">%</span>
+                                <span class="gauge-subtitle" id="cpu-model">Host Processor</span>
+                            </div>
+                        </div>
+                        <div class="tile-details">
+                            <div class="detail-bar-row">
+                                <span class="detail-label">PROCESSORS</span>
+                                <span class="detail-bar-value" id="cpu-cores">--</span>
+                            </div>
+                            <div class="detail-bar-row">
+                                <span class="detail-label">LOAD AVG</span>
+                                <span class="detail-bar-value" id="cpu-loadavg">--</span>
+                            </div>
+                            <div class="detail-bar-row">
+                                <span class="detail-label">TEMP</span>
+                                <span class="detail-bar-value" id="cpu-temp">--°C</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RAM Tile -->
+                <div class="telemetry-tile ram-tile" id="tile-ram">
+                    <div class="tile-header">
+                        <div class="tile-label">
+                            <div class="tile-icon"><i class="fa-solid fa-memory"></i></div>
+                            <span class="tile-title">RAM</span>
+                        </div>
+                        <span class="tile-badge" id="ram-model">System Memory</span>
+                    </div>
+                    <div class="tile-body">
+                        <div class="circular-gauge">
+                            <div class="gauge-ring"></div>
+                            <div class="gauge-ring-progress" id="ram-gauge-progress" style="transform: rotate(0deg);"></div>
+                            <div class="gauge-center">
+                                <span class="gauge-value" id="ram-value">0.0</span>
+                                <span class="gauge-unit">%</span>
+                                <span class="gauge-subtitle" id="ram-model-sub">System Memory</span>
+                            </div>
+                        </div>
+                        <div class="tile-details">
+                            <div class="detail-bar-row">
+                                <span class="detail-label">USED</span>
+                                <div class="detail-bar-bg">
+                                    <div class="detail-bar-fill ram-bar-fill" id="ram-bar" style="width: 0%"></div>
+                                </div>
+                                <span class="detail-bar-value" id="ram-used">-- / --</span>
+                            </div>
+                            <div class="detail-bar-row">
+                                <span class="detail-label">CACHED</span>
+                                <span class="detail-bar-value" id="ram-cached">--</span>
+                            </div>
+                            <div class="detail-bar-row">
+                                <span class="detail-label">SWAP</span>
+                                <span class="detail-bar-value" id="ram-swap">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GPU tiles injected dynamically by JS -->
+            </div>
+        </section>
+
+        <!-- Models Switchboard -->
+        <section class="switchboard-section">
+            <div class="switchboard-header">
+                <h2><i class="fa-solid fa-toggle-on neon-glow-icon"></i> LLM MODEL SWITCHBOARD</h2>
+                <div class="switchboard-info">
+                    <span class="info-pill" id="switchboard-info-text"><i class="fa-solid fa-circle-info"></i> Single Port: Activating a model auto-stops the previous one. Multi Port: Start multiple models simultaneously.</span>
+                </div>
+            </div>
+
+            <div class="models-grid" id="models-grid">
+                <!-- Model cards injected by JS -->
+            </div>
+        </section>
+    </main>
+
+    <!-- Console / Live Logs Drawer -->
+    <div id="logs-drawer" class="console-drawer">
+        <div class="console-header">
+            <div class="console-title">
+                <i class="fa-solid fa-terminal"></i>
+                <span>CONSOLE OUTPUT: <span id="current-log-model" class="glow-text">None</span></span>
+            </div>
+            <div class="console-controls">
+                <button id="btn-close-console" class="console-btn close-btn" title="Close console"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+        </div>
+        <div id="console-body" class="console-body">
+            <pre id="console-content">Logs will stream here...</pre>
+        </div>
+    </div>
+
+    <!-- Chat Playground Drawer -->
+    <div id="playground-drawer" class="playground-drawer">
+        <div class="playground-header">
+            <div class="playground-title">
+                <i class="fa-solid fa-comments neon-glow-icon"></i>
+                <span>CHAT PLAYGROUND</span>
+            </div>
+            <div class="playground-config">
+                <div class="select-wrapper">
+                    <select id="chat-model-select">
+                        <option value="">-- Select Running Model --</option>
+                    </select>
+                </div>
+                <button id="btn-close-playground" class="playground-btn close-btn" title="Close playground"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+        </div>
+
+        <div id="playground-body" class="playground-body">
+            <!-- Alert if no models active -->
+            <div id="playground-alert" class="playground-alert">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <p>No active LLM detected. Start a model from the switchboard to enable the Chat Playground.</p>
+            </div>
+
+            <div id="chat-messages" class="chat-messages">
+                <div class="chat-bubble assistant-bubble system-message">
+                    <div class="bubble-avatar"><i class="fa-solid fa-robot"></i></div>
+                    <div class="bubble-content">
+                        <strong>LlamaShift Terminal</strong>
+                        <p>Welcome to the interactive LLM testing environment. Direct OpenAI-compatible socket pipeline initialized. Select a running model above to begin inference.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="playground-footer">
+            <div class="chat-input-row">
+                <textarea id="chat-input" placeholder="Type your query here... (Press Enter to send, Shift+Enter for newline)" disabled></textarea>
+                <button id="btn-send-chat" class="btn-send" disabled>
+                    <i class="fa-solid fa-paper-plane"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Model Config Modal (Edit) -->
+    <div id="model-config-overlay" class="modal-overlay">
+        <div class="config-modal">
+            <div class="config-modal-header">
+                <div class="config-modal-title">
+                    <i class="fa-solid fa-gear neon-glow-icon"></i>
+                    <span>MODEL CONFIGURATION</span>
+                </div>
+                <button id="btn-close-config-modal" class="config-modal-close" title="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="config-modal-body">
+                <input type="hidden" id="config-model-id">
+
+                <!-- Info Section -->
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-info-circle"></i> Model Info
+                    </div>
+                    <div class="config-field">
+                        <label>Display Name</label>
+                        <input type="text" id="config-name" placeholder="Model display name">
+                    </div>
+                    <div class="config-field">
+                        <label>Description</label>
+                        <input type="text" id="config-desc" placeholder="Short description">
+                    </div>
+                </div>
+
+                <!-- Runtime Section -->
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-sliders"></i> Runtime
+                    </div>
+                    <div class="config-row">
+                        <div class="config-field">
+                            <label>Context Size</label>
+                            <input type="number" id="config-ctxSize" min="512" step="1024">
+                        </div>
+                        <div class="config-field">
+                            <label>Parallel</label>
+                            <input type="number" id="config-nParallel" min="1" max="16" step="1">
+                        </div>
+                        <div class="config-field">
+                            <label>Batch Size</label>
+                            <input type="number" id="config-batchSize" min="256" step="256">
+                        </div>
+                    </div>
+                    <div class="config-row">
+                        <div class="config-field">
+                            <label>GPU Layers</label>
+                            <input type="number" id="config-nGpuLayers" min="0" step="1">
+                        </div>
+                        <div class="config-field">
+                            <label>Threads (0=auto)</label>
+                            <input type="number" id="config-threads" min="0" step="1">
+                        </div>
+                        <div class="config-field">
+                            <label>Port</label>
+                            <input type="number" id="config-port" min="1024" step="1">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Inference Section -->
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-message"></i> Chat Inference
+                    </div>
+                    <div class="config-row">
+                        <div class="config-field">
+                            <label>Temperature</label>
+                            <input type="number" id="config-temperature" min="0" max="2" step="0.05">
+                        </div>
+                        <div class="config-field">
+                            <label>Max Tokens</label>
+                            <input type="number" id="config-maxTokens" min="64" step="64">
+                        </div>
+                        <div class="config-field">
+                            <label>Top P</label>
+                            <input type="number" id="config-topP" min="0" max="1" step="0.01">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Device Selection -->
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-server"></i> Device / Accelerator
+                    </div>
+                    <div class="config-field">
+                        <label>Device(s)</label>
+                        <select id="config-device" multiple class="device-multi-select">
+                            <option value="CPU0">CPU0 (CPU)</option>
+                            <option value="CUDA0">CUDA0 (NVIDIA GPU 0)</option>
+                            <option value="CUDA1">CUDA1 (NVIDIA GPU 1)</option>
+                            <option value="CUDA2">CUDA2 (NVIDIA GPU 2)</option>
+                            <option value="CUDA3">CUDA3 (NVIDIA GPU 3)</option>
+                            <option value="ROCm0">ROCm0 (AMD GPU 0)</option>
+                            <option value="ROCm1">ROCm1 (AMD GPU 1)</option>
+                            <option value="ROCm2">ROCm2 (AMD GPU 2)</option>
+                            <option value="ROCm3">ROCm3 (AMD GPU 3)</option>
+                            <option value="Vulkan0">Vulkan0 (Vulkan GPU 0)</option>
+                            <option value="Vulkan1">Vulkan1 (Vulkan GPU 1)</option>
+                            <option value="Vulkan2">Vulkan2 (Vulkan GPU 2)</option>
+                            <option value="Vulkan3">Vulkan3 (Vulkan GPU 3)</option>
+                            <option value="Metal0">Metal0 (Apple Metal)</option>
+                        </select>
+                        <small style="color: var(--text-secondary); margin-top: 4px; display: block;">Hold Ctrl/Cmd to select multiple devices</small>
+                    </div>
+                </div>
+
+                <!-- Extra Args -->
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-terminal"></i> Extra CLI Args
+                    </div>
+                    <div class="config-field">
+                        <label>Space-separated arguments</label>
+                        <input type="text" id="config-extraArgs" placeholder="--flash-attn --mlock ...">
+                    </div>
+                </div>
+            </div>
+            <div class="config-modal-footer">
+                <button id="btn-reset-config" class="btn btn-secondary">
+                    <i class="fa-solid fa-rotate-left"></i> Reset Defaults
+                </button>
+                <button id="btn-save-config" class="btn btn-glow btn-start">
+                    <i class="fa-solid fa-floppy-disk"></i> Save
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Restart Confirmation Modal -->
+    <div id="restart-confirm-overlay" class="modal-overlay">
+        <div class="config-modal" style="max-width: 440px;">
+            <div class="config-modal-header">
+                <div class="config-modal-title">
+                    <i class="fa-solid fa-triangle-exclamation" style="color: #f59e0b;"></i>
+                    CONFIRM RESTART
+                </div>
+                <button id="btn-close-restart-modal" class="config-modal-close">&times;</button>
+            </div>
+            <div class="config-modal-body">
+                <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;" id="restart-modal-message">
+                    Are you sure you want to stop all active models and restart the system service?
+                </p>
+            </div>
+            <div class="config-modal-footer">
+                <button id="btn-cancel-restart" class="btn btn-secondary">
+                    <i class="fa-solid fa-xmark"></i> Cancel
+                </button>
+                <button id="btn-confirm-restart" class="btn btn-warning">
+                    <i class="fa-solid fa-arrows-spin"></i> Restart
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Single Port Confirmation Modal -->
+    <div id="single-port-confirm-overlay" class="modal-overlay">
+        <div class="config-modal" style="max-width: 500px;">
+            <div class="config-modal-header">
+                <div class="config-modal-title">
+                    <i class="fa-solid fa-exchange-alt" style="color: #f59e0b;"></i>
+                    SWITCH MODEL
+                </div>
+                <button id="btn-close-single-port-confirm" class="config-modal-close">&times;</button>
+            </div>
+            <div class="config-modal-body">
+                <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6;" id="single-port-confirm-message">
+                </p>
+            </div>
+            <div class="config-modal-footer">
+                <button id="btn-cancel-single-port" class="btn btn-secondary">
+                    <i class="fa-solid fa-xmark"></i> Cancel
+                </button>
+                <button id="btn-confirm-single-port" class="btn btn-warning">
+                    <i class="fa-solid fa-stop"></i> Stop & Start
+                </button>
+            </div>
+        </div>
+    </div>
+
+    
+    <!-- New Model Modal -->
+    <div id="new-model-overlay" class="modal-overlay">
+        <div class="config-modal">
+            <div class="config-modal-header">
+                <div class="config-modal-title">
+                    <i class="fa-solid fa-plus-circle neon-glow-icon"></i>
+                    <span>CREATE NEW MODEL</span>
+                </div>
+                <button id="btn-close-new-model" class="config-modal-close" title="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="config-modal-body">
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-id-badge"></i> Model Identity
+                    </div>
+                    <div class="config-field">
+                        <label>Model ID <span style="color: #ef4444;">*</span></label>
+                        <input type="text" id="new-model-id" placeholder="e.g. qwen3_8b" pattern="[a-zA-Z0-9_]+" title="Alphanumeric and underscores only">
+                    </div>
+                    <div class="config-field">
+                        <label>Display Name <span style="color: #ef4444;">*</span></label>
+                        <input type="text" id="new-model-name" placeholder="e.g. Qwen3 8B">
+                    </div>
+                    <div class="config-field">
+                        <label>Description</label>
+                        <input type="text" id="new-model-desc" placeholder="Short description">
+                    </div>
+                </div>
+
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-file"></i> File & Network
+                    </div>
+                    <div class="config-field">
+                        <label>GGUF Filename <span style="color: #ef4444;">*</span></label>
+                        <input type="text" id="new-model-filename" placeholder="e.g. model.gguf" list="available-files-list">
+                        <small style="color: var(--text-secondary); margin-top: 2px; display: block;" id="available-files-label">Files in models dir will populate as you type</small>
+                        <datalist id="available-files-list"></datalist>
+                    </div>
+                    <div class="config-row">
+                        <div class="config-field">
+                            <label>Port <span style="color: #ef4444;">*</span></label>
+                            <input type="number" id="new-model-port" min="1024" max="65535" value="9001">
+                        </div>
+                        <div class="config-field">
+                            <label>Context Size</label>
+                            <input type="number" id="new-model-ctxSize" min="512" step="1024" value="16384">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-sliders"></i> Runtime
+                    </div>
+                    <div class="config-row">
+                        <div class="config-field">
+                            <label>Parallel</label>
+                            <input type="number" id="new-model-nParallel" min="1" max="16" value="1">
+                        </div>
+                        <div class="config-field">
+                            <label>GPU Layers</label>
+                            <input type="number" id="new-model-nGpuLayers" min="0" value="99">
+                        </div>
+                        <div class="config-field">
+                            <label>Batch Size</label>
+                            <input type="number" id="new-model-batchSize" min="256" step="256" value="2048">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-server"></i> Device / Accelerator
+                    </div>
+                    <div class="config-field">
+                        <label>Device</label>
+                        <select id="new-model-device" multiple class="device-multi-select">
+                            <option value="CPU0" selected>CPU0 (CPU)</option>
+                            <option value="CUDA0">CUDA0 (NVIDIA GPU 0)</option>
+                            <option value="CUDA1">CUDA1 (NVIDIA GPU 1)</option>
+                            <option value="CUDA2">CUDA2 (NVIDIA GPU 2)</option>
+                            <option value="CUDA3">CUDA3 (NVIDIA GPU 3)</option>
+                            <option value="ROCm0">ROCm0 (AMD GPU 0)</option>
+                            <option value="ROCm1">ROCm1 (AMD GPU 1)</option>
+                            <option value="ROCm2">ROCm2 (AMD GPU 2)</option>
+                            <option value="ROCm3">ROCm3 (AMD GPU 3)</option>
+                            <option value="Vulkan0">Vulkan0 (Vulkan GPU 0)</option>
+                            <option value="Vulkan1">Vulkan1 (Vulkan GPU 1)</option>
+                            <option value="Vulkan2">Vulkan2 (Vulkan GPU 2)</option>
+                            <option value="Vulkan3">Vulkan3 (Vulkan GPU 3)</option>
+                            <option value="Metal0">Metal0 (Apple Metal)</option>
+                        </select>
+                        <small style="color: var(--text-secondary); margin-top: 4px; display: block;">Hold Ctrl/Cmd to select multiple devices</small>
+                    </div>
+                </div>
+            </div>
+            <div class="config-modal-footer">
+                <button id="btn-cancel-new-model" class="btn btn-secondary">
+                    <i class="fa-solid fa-xmark"></i> Cancel
+                </button>
+                <button id="btn-create-model" class="btn btn-glow btn-start">
+                    <i class="fa-solid fa-plus"></i> Create Model
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="index.js?v=4"></script>
+
+    <!-- PIN Security Overlay -->
+    <div id="pin-security-overlay" class="pin-security-overlay hidden">
+        <div class="pin-security-container">
+            <!-- Create PIN Section (First time) -->
+            <div id="pin-create-section" class="create-pin-section">
+                <div class="security-lock-icon">
+                    <i class="fa-solid fa-lock"></i>
+                </div>
+                <h2>Create Security PIN</h2>
+                <p>Enter a 6-digit PIN to secure your LlamaShift application</p>
+                
+                <div class="pin-display" id="pin-create-display">
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                </div>
+                
+                <div class="pin-keypad">
+                    <button class="pin-key" data-key="1">1</button>
+                    <button class="pin-key" data-key="2">2</button>
+                    <button class="pin-key" data-key="3">3</button>
+                    <button class="pin-key" data-key="4">4</button>
+                    <button class="pin-key" data-key="5">5</button>
+                    <button class="pin-key" data-key="6">6</button>
+                    <button class="pin-key" data-key="7">7</button>
+                    <button class="pin-key" data-key="8">8</button>
+                    <button class="pin-key" data-key="9">9</button>
+                    <button class="pin-key clear-btn" data-action="clear">CLR</button>
+                    <button class="pin-key" data-key="0">0</button>
+                    <button class="pin-key action-btn" data-action="done" id="pin-create-done-btn">DONE</button>
+                </div>
+                <p class="pin-hint">Choose a secure 6-digit PIN</p>
+            </div>
+
+            <!-- Confirm PIN Section (First time) -->
+            <div id="pin-confirm-section" class="confirm-pin-section">
+                <div class="security-lock-icon">
+                    <i class="fa-solid fa-check-circle"></i>
+                </div>
+                <h2>Confirm Your PIN</h2>
+                <p>Enter the same 6-digit PIN to confirm</p>
+                
+                <div class="pin-display" id="pin-confirm-display">
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                </div>
+                
+                <div class="pin-keypad">
+                    <button class="pin-key" data-key="1">1</button>
+                    <button class="pin-key" data-key="2">2</button>
+                    <button class="pin-key" data-key="3">3</button>
+                    <button class="pin-key" data-key="4">4</button>
+                    <button class="pin-key" data-key="5">5</button>
+                    <button class="pin-key" data-key="6">6</button>
+                    <button class="pin-key" data-key="7">7</button>
+                    <button class="pin-key" data-key="8">8</button>
+                    <button class="pin-key" data-key="9">9</button>
+                    <button class="pin-key clear-btn" data-action="clear">CLR</button>
+                    <button class="pin-key" data-key="0">0</button>
+                    <button class="pin-key action-btn" data-action="done" id="pin-confirm-done-btn">DONE</button>
+                </div>
+                <p class="pin-hint">Re-enter your 6-digit PIN</p>
+                <p class="pin-error" id="pin-confirm-error"></p>
+            </div>
+
+            <!-- Verify PIN Section (Returning users) -->
+            <div id="pin-verify-section" class="verify-pin-section">
+                <div class="security-lock-icon">
+                    <i class="fa-solid fa-lock"></i>
+                </div>
+                <h2>Enter Your PIN</h2>
+                <p>Please enter your 6-digit PIN to continue</p>
+                
+                <div class="pin-display" id="pin-verify-display">
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                    <div class="pin-digit"></div>
+                </div>
+                
+                <div class="pin-keypad">
+                    <button class="pin-key" data-key="1">1</button>
+                    <button class="pin-key" data-key="2">2</button>
+                    <button class="pin-key" data-key="3">3</button>
+                    <button class="pin-key" data-key="4">4</button>
+                    <button class="pin-key" data-key="5">5</button>
+                    <button class="pin-key" data-key="6">6</button>
+                    <button class="pin-key" data-key="7">7</button>
+                    <button class="pin-key" data-key="8">8</button>
+                    <button class="pin-key" data-key="9">9</button>
+                    <button class="pin-key clear-btn" data-action="clear">CLR</button>
+                    <button class="pin-key" data-key="0">0</button>
+                    <button class="pin-key action-btn" data-action="done" id="pin-verify-done-btn">LOGIN</button>
+                </div>
+                <p class="pin-error" id="pin-verify-error"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Playground Toggle Button -->
+    <button id="btn-playground-toggle" class="footer-playground-btn">
+        <i class="fa-solid fa-comments"></i> PLAYGROUND
+    </button>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+        <div class="footer-content">
+            <span class="footer-brand">LlamaShift</span>
+            <span class="footer-divider">|</span>
+            <span class="footer-version">v0.1.0</span>
+            <span class="footer-divider">|</span>
+            <span class="footer-author">Built by <strong>Safiyu</strong></span>
+        </div>
+    </footer>
+
+    <style>
+        /* Add bottom padding to body for fixed footer */
+        body {
+            padding-bottom: 60px;
+        }
+    </style>
+</body>
+</html>

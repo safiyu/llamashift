@@ -1,0 +1,255 @@
+{
+    "appName": "llamashift",
+    "serviceName": "llamashift",
+    "masterPort": 9000,
+    "binaryPath": "/home/safiyu/llama.cpp/build/bin/llama-server",
+    "dataDir": "/home/safiyu/models",
+    "mode": "single_port",
+    "serverPort": 8002,
+    "models": {
+        "qwen36": {
+            "id": "qwen36",
+            "name": "Qwen 3.6 35B A3B Vision",
+            "size": "27GB",
+            "desc": "Best overall reasoning / coding / multimodal model",
+            "gpu": "AMD R9700",
+            "devices": [
+                "ROCm0"
+            ],
+            "filename": "Qwen3.6-35B-A3B-Q6_K.gguf",
+            "mmproj": "mmproj-Qwen3.6-35B-A3B-BF16.gguf",
+            "port": 9000,
+            "ctxSize": 128536,
+            "nParallel": 1,
+            "endpoint": "http://localhost:9000/v1",
+            "maxTokens": 8192,
+            "extraArgs": [
+                "--flash-attn",
+                "on",
+                "--cache-type-k",
+                "q8_0",
+                "--cache-type-v",
+                "q8_0",
+                "--no-context-shift"
+            ]
+        },
+        "coder_next": {
+            "id": "coder_next",
+            "name": "Qwen3 Coder Next IQ4_XS",
+            "size": "38GB",
+            "desc": "Primary coding model - 80B MoE, dual GPU split",
+            "gpu": "AMD R9700 + RTX 4060",
+            "filename": "Qwen3-Coder-Next-UD-IQ4_XS.gguf",
+            "port": 9001,
+            "ctxSize": 65152,
+            "devices": [
+                "ROCm0",
+                "Vulkan2"
+            ],
+            "nParallel": 1,
+            "endpoint": "http://localhost:9001/v1",
+            "maxTokens": 8192,
+            "extraArgs": [
+                "--n-gpu-layers",
+                "90",
+                "--threads",
+                "12",
+                "--threads-batch",
+                "12",
+                "--flash-attn",
+                "on",
+                "--cache-type-k",
+                "q4_0",
+                "--cache-type-v",
+                "q4_0",
+                "--temp",
+                "0.6",
+                "--top-p",
+                "0.95",
+                "--top-k",
+                "40",
+                "--min-p",
+                "0.05",
+                "--repeat-penalty",
+                "1.03",
+                "--batch-size",
+                "1024",
+                "--ubatch-size",
+                "256",
+                "--cache-ram", "0"
+            ]
+        },
+        "qwen36_uncensored": {
+            "id": "qwen36_uncensored",
+            "name": "Qwen 3.6 35B A3B Uncensored",
+            "size": "27GB",
+            "desc": "Creative / uncensored experimental model",
+            "gpu": "AMD R9700",
+            "devices": [
+                "ROCm0"
+            ],
+            "filename": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q5_K_P.gguf",
+            "port": 9002,
+            "ctxSize": 128768,
+            "nParallel": 1,
+            "endpoint": "http://localhost:9002/v1",
+            "maxTokens": 8192,
+            "extraArgs": [
+                "--flash-attn",
+                "on",
+                "--temp",
+                "1.15",
+                "--top-p",
+                "0.97",
+                "--top-k",
+                "50",
+                "--min-p",
+                "0.02"
+            ]
+        },
+        "qwen27": {
+            "id": "qwen27",
+            "name": "Qwen 3.6 27B Q5_K_M",
+            "size": "20GB",
+            "desc": "Balanced dense reasoning + coding fallback",
+            "gpu": "AMD R9700",
+            "devices": [
+                "ROCm0"
+            ],
+            "filename": "Qwen_Qwen3.6-27B-Q5_K_M.gguf",
+            "port": 9003,
+            "ctxSize": 128000,
+            "nParallel": 1,
+            "endpoint": "http://localhost:9003/v1",
+            "maxTokens": 12288,
+            "extraArgs": [
+                "--flash-attn",
+                "on",
+                "--cache-type-k",
+                "q8_0",
+                "--cache-type-v",
+                "q8_0",
+                "--temp",
+                "0.7",
+                "--top-p",
+                "0.9",
+                "--top-k",
+                "40"
+            ]
+        },
+        "deepseek_r1": {
+            "id": "deepseek_r1",
+            "name": "DeepSeek R1 Distill Qwen 32B",
+            "size": "19GB",
+            "desc": "Reasoning / math / deep analysis specialist",
+            "gpu": "AMD R9700",
+            "devices": [
+                "ROCm0"
+            ],
+            "filename": "DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf",
+            "port": 9004,
+            "ctxSize": 26384,
+            "nParallel": 1,
+            "endpoint": "http://localhost:9004/v1",
+            "maxTokens": 16384,
+            "extraArgs": [
+                "--flash-attn",
+                "on",
+                "--temp",
+                "0.6",
+                "--top-p",
+                "0.95",
+                "--top-k",
+                "20",
+                "--repeat-penalty",
+                "1.05"
+            ]
+        },
+        "qwen35_9b": {
+            "id": "qwen35_9b",
+            "name": "Qwen 3.5 9B Q5_K_M",
+            "size": "~7GB",
+            "desc": "Fast high-quality utility assistant",
+            "gpu": "RTX 4090",
+            "devices": [
+                "Vulkan2"
+            ],
+            "filename": "Qwen3.5-9B-Q5_K_M.gguf",
+            "port": 9005,
+            "ctxSize": 65536,
+            "nParallel": 4,
+            "endpoint": "http://localhost:9005/v1",
+            "maxTokens": 8192,
+            "extraArgs": [
+                "--flash-attn",
+                "on",
+                "--temp",
+                "0.8",
+                "--top-p",
+                "0.92",
+                "--top-k",
+                "40"
+            ]
+        },
+        "gpt_oss": {
+            "id": "gpt_oss",
+            "name": "OpenAI GPT-OSS 20B",
+            "size": "11GB",
+            "desc": "Structured assistant / tool-use model",
+            "gpu": "AMD R9700",
+            "devices": [
+                "ROCm0"
+            ],
+            "filename": "openai_gpt-oss-20b-Q4_K_M.gguf",
+            "port": 9006,
+            "ctxSize": 132768,
+            "nParallel": 2,
+            "endpoint": "http://localhost:9006/v1",
+            "maxTokens": 8192,
+            "extraArgs": [
+                "--flash-attn",
+                "on",
+                "--temp",
+                "0.7",
+                "--top-p",
+                "0.9",
+                "--top-k",
+                "40",
+                "--repeat-penalty",
+                "1.05"
+            ]
+        },
+        "coder30b": {
+            "id": "coder30b",
+            "name": "Qwen3 Coder 30B A3B Q6",
+            "size": "24GB",
+            "desc": "Stable fallback coding model",
+            "gpu": "AMD R9700",
+            "devices": [
+                "ROCm0"
+            ],
+            "filename": "Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf",
+            "port": 9007,
+            "ctxSize": 128000,
+            "nParallel": 1,
+            "endpoint": "http://localhost:9007/v1",
+            "maxTokens": 12288,
+            "extraArgs": [
+                "--flash-attn",
+                "on",
+                "--cache-type-k",
+                "q8_0",
+                "--cache-type-v",
+                "q8_0",
+                "--temp",
+                "0.85",
+                "--top-p",
+                "0.95",
+                "--top-k",
+                "40",
+                "--min-p",
+                "0.01"
+            ]
+        }
+    }
+}

@@ -1,0 +1,484 @@
+/* ======================================== */
+/* Base Styles - Reset, Body, Header        */
+/* ======================================== */
+
+/* Reset & Base */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+}
+
+body {
+    font-family: var(--font-sans);
+    background: var(--bg-deepest);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: hidden;
+    position: relative;
+    line-height: 1.6;
+}
+
+/* Background Grid Overlay */
+.grid-overlay {
+    position: fixed;
+    inset: 0;
+    background-image: 
+        linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+    background-size: 50px 50px;
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* Ambient Glow Overlay */
+.glow-overlay {
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at 20% 30%, var(--amd-glow) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 70%, var(--nvidia-glow) 0%, transparent 50%);
+    opacity: 0.3;
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* Header */
+.nexus-header {
+    background: rgba(6, 7, 10, 0.8);
+    border-bottom: 1px solid var(--glass-border);
+    padding: 0.6rem 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    backdrop-filter: blur(12px);
+    position: sticky;
+    top: 0;
+    z-index: var(--z-overlay);
+}
+
+.logo-area {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.nexus-logo {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+.nexus-logo-img {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    box-shadow: 0 0 12px var(--amd-glow);
+}
+
+.nexus-title {
+    display: flex;
+    align-items: baseline;
+    gap: 0.2rem;
+}
+
+.title-llama {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    letter-spacing: -0.5px;
+}
+
+.title-shift {
+    font-size: 1.5rem;
+    font-weight: 800;
+    background: linear-gradient(90deg, var(--amd-neon), var(--nvidia-neon));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.nexus-subtitle {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    letter-spacing: 0.5px;
+}
+
+/* Header Controls */
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.btn-header {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--glass-border);
+    color: var(--text-muted);
+    cursor: pointer;
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition-quick);
+    font-size: 0.85rem;
+}
+
+.btn-header:hover {
+    color: var(--text-primary);
+    border-color: var(--glass-border-glow);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.btn-header.active {
+    color: var(--amd-neon);
+    border-color: rgba(0, 243, 255, 0.2);
+    background: rgba(0, 243, 255, 0.05);
+}
+
+/* Mode Toggle */
+.mode-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.6rem;
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--glass-border);
+}
+
+.mode-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.mode-label.active {
+    color: var(--amd-neon);
+    text-shadow: 0 0 8px var(--amd-glow);
+}
+
+.toggle-switch {
+    position: relative;
+    width: 40px;
+    height: 22px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-dim);
+    border-radius: 22px;
+    border: 1px solid var(--glass-border);
+    transition: var(--transition-quick);
+    cursor: pointer;
+}
+
+.toggle-slider:before {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    left: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: var(--transition-quick);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background: rgba(0, 243, 255, 0.15);
+    border-color: rgba(0, 243, 255, 0.3);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    transform: translateY(-50%) translateX(18px);
+    background: var(--amd-neon);
+    box-shadow: 0 0 8px var(--amd-glow);
+}
+
+/* System Status Bar */
+.system-status-bar {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+.metric-pill {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.7rem;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--glass-border);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.metric-pill i {
+    color: var(--amd-neon);
+    font-size: 0.7rem;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-deep);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--bg-dim);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* Selection */
+::selection {
+    background: var(--amd-neon);
+    color: var(--bg-deepest);
+}
+
+/* Utility Classes */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}
+
+/* Animations */
+@keyframes pulse-glow {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+@keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+@keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+@keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+}
+
+@keyframes slide-up {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slide-down {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ======================================== */
+/* Toast Notifications                      */
+/* ======================================== */
+
+.toast-container {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: var(--z-overlay);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 480px;
+    pointer-events: none;
+    margin-top: 0;
+}
+
+.toast {
+    background: rgba(10, 12, 16, 0.95);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    animation: slide-up 0.3s ease-out forwards;
+    pointer-events: auto;
+    position: relative;
+    overflow: hidden;
+}
+
+.toast.show {
+    animation: slide-up 0.3s ease-out forwards;
+}
+
+.toast.success {
+    border-color: rgba(118, 185, 0, 0.4);
+    box-shadow: 0 0 20px rgba(118, 185, 0, 0.15);
+}
+
+.toast.success .toast-icon {
+    color: var(--success-color, #76b900);
+}
+
+.toast.error {
+    border-color: rgba(255, 71, 71, 0.4);
+    box-shadow: 0 0 20px rgba(255, 71, 71, 0.15);
+}
+
+.toast.error .toast-icon {
+    color: var(--error-color, #ff4747);
+}
+
+.toast.info {
+    border-color: rgba(0, 243, 255, 0.4);
+    box-shadow: 0 0 20px rgba(0, 243, 255, 0.15);
+}
+
+.toast.info .toast-icon {
+    color: var(--info-color, #00f3ff);
+}
+
+.toast .toast-icon {
+    font-size: 1.2rem;
+    min-width: 24px;
+    text-align: center;
+}
+
+.toast .toast-message {
+    flex: 1;
+    line-height: 1.5;
+    word-wrap: break-word;
+}
+
+.toast .toast-close {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    margin-left: 8px;
+    border-radius: var(--radius-sm);
+    transition: var(--transition-quick);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.toast .toast-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+}
+
+/* Toast progress bar for auto-dismiss */
+.toast::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    width: 100%;
+    background: linear-gradient(90deg, var(--amd-neon), var(--nvidia-neon));
+    transform-origin: left;
+    animation: none;
+}
+
+.toast.success::after {
+    background: linear-gradient(90deg, #76b900, #5aa300);
+}
+
+.toast.error::after {
+    background: linear-gradient(90deg, #ff4747, #cc3333);
+}
+
+.toast.info::after {
+    background: linear-gradient(90deg, var(--amd-neon), var(--nvidia-neon));
+}
+
+/* Animated progress bar for auto-dismiss */
+.toast.animate-progress::after {
+    animation: toast-progress 4s linear forwards;
+}
+
+@keyframes toast-progress {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+}
+
+/* Mobile responsive */
+@media (max-width: 600px) {
+    .toast-container {
+        top: 12px;
+        left: 50%;
+        width: 92%;
+        max-width: 92%;
+    }
+    
+    .toast {
+        padding: 12px 14px;
+        font-size: 0.85rem;
+    }
+}
+
+/* Pause progress animation on hover */
+.toast.pause-progress::after {
+    animation-play-state: paused;
+    transform: scaleX(var(--animation-paused, 1));
+}

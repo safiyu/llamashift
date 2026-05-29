@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>🔀 Llama Switcher — Code Review Diff</title>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --text: #c9d1d9; --text-dim: #8b949e;
+  --add-bg: #0d2818; --add-line: #238636; --add-text: #56d364;
+  --del-bg: #2d1214; --del-line: #da3633; --del-text: #ff7b72;
+  --ctx: #161b22;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+.toolbar {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 16px 24px; position: sticky; top: 0; z-index: 100;
+}
+.toolbar h1 { font-size: 18px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.toolbar h1 .accent { color: #58a6ff; }
+.stats { display: flex; gap: 16px; font-size: 13px; color: var(--text-dim); }
+.stats .plus { color: var(--add-text); font-weight: 600; }
+.stats .minus { color: var(--del-text); font-weight: 600; }
+.files { display: flex; min-height: calc(100vh - 80px); }
+.sidebar {
+  width: 280px; background: var(--surface); border-right: 1px solid var(--border);
+  padding: 16px; overflow-y: auto;
+}
+.file-item {
+  padding: 12px; margin-bottom: 8px; border-radius: 8px; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; border-left: 3px solid transparent;
+  transition: all 0.15s;
+}
+.file-item:hover { background: rgba(255,255,255,0.04); }
+.file-item.active { background: rgba(88,166,255,0.1); border-left-color: #58a6ff; }
+.file-item .name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-item .badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600; }
+.file-item .badge.add { background: rgba(35,134,54,0.3); color: var(--add-text); }
+.file-item .badge.del { background: rgba(218,54,51,0.3); color: var(--del-text); }
+.file-item .badge.mod { background: rgba(88,166,255,0.3); color: #58a6ff; }
+.content { flex: 1; overflow-y: auto; padding: 20px; }
+.diff-section {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  margin-bottom: 20px; overflow: hidden;
+}
+.diff-header {
+  background: #1c2333; padding: 12px 16px; font-size: 14px; font-weight: 600;
+  display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border);
+}
+.diff-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px; }
+.diff-table tr { transition: background 0.1s; }
+.diff-table td { padding: 0 12px; vertical-align: top; }
+.diff-table .lineno {
+  width: 60px; text-align: right; color: var(--text-dim);
+  padding-right: 8px; user-select: none; border-right: 1px solid var(--border);
+  background: rgba(0,0,0,0.15);
+}
+.diff-table .sign {
+  width: 28px; text-align: center; font-weight: 700; user-select: none;
+}
+.diff-table .code { padding-left: 12px; white-space: pre; line-height: 1.6; }
+.line-add { background: var(--add-bg); }
+.line-add .sign { color: var(--add-line); background: rgba(35,134,54,0.15); }
+.line-add .code { color: var(--add-text); }
+.line-del { background: var(--del-bg); }
+.line-del .sign { color: var(--del-line); background: rgba(218,54,51,0.15); }
+.line-del .code { color: var(--del-text); text-decoration: line-through; text-decoration-color: rgba(255,123,114,0.2); }
+.line-ctx { background: var(--ctx); }
+.line-ctx .code { color: var(--text); }
+.hunk-header {
+  background: var(--surface); color: var(--text-dim); font-size: 12px;
+  padding: 6px 16px; border-bottom: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+}
+.comment {
+  color: var(--text-dim); font-style: italic; padding: 8px 16px;
+  background: rgba(0,0,0,0.2); border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.wrap { white-space: pre-wrap; word-break: break-all; }
+.toggle-wrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); margin-top: 8px; }
+.toggle-wrap input { accent-color: #58a6ff; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <h1>🔀 <span class="accent">Buddy</span> — Llama Switcher Diff Viewer</h1>
+  <div class="stats">
+    <span>server.py: <span class="plus">+209 lines</span> <span class="minus">-146 lines</span></span>
+    <span>index.js: <span class="plus">+45 lines</span> <span class="minus">-18 lines</span></span>
+  </div>
+  <div class="toggle-wrap">
+    <input type="checkbox" id="wrapToggle" onchange="toggleWrap()">
+    <label for="wrapToggle">Wrap long lines</label>
+  </div>
+</div>
+
+<div class="files">
+  <div class="sidebar">
+    <div style="font-size:11px;text-transform:uppercase;color:var(--text-dim);margin-bottom:12px;letter-spacing:0.05em;">Files Changed (2)</div>
+    <div class="file-item active" onclick="showSection(0)">
+      <span>🐍</span>
+      <span class="name">server.py</span>
+      <span class="badge mod">+209 -146</span>
+    </div>
+    <div class="file-item" onclick="showSection(1)">
+      <span>⚡</span>
+      <span class="name">index.js</span>
+      <span class="badge mod">+45 -18</span>
+    </div>
+  </div>
+  <div class="content" id="contentArea">
+    <div id="section0"></div>
+    <div id="section1" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+let wrapLines = false;
+
+function toggleWrap() {
+  wrapLines = document.getElementById('wrapToggle').checked;
+  document.querySelectorAll('.code').forEach(el => {
+    el.classList.toggle('wrap', wrapLines);
+  });
+}
+
+function showSection(idx) {
+  document.querySelectorAll('.content > div').forEach((d, i) => {
+    d.style.display = i === idx ? 'block' : 'none';
+  });
+  document.querySelectorAll('.file-item').forEach((el, i) => {
+    el.classList.toggle('active', i === idx);
+  });
+}
+
+// Generate the diff visualization
+function renderDiff() {
+  const sections = [
+    {
+      title: "server.py — Critical Fixes (#1-4)",
+      file: "server.py",
+      hunks: [
+        {
+          comment: "Fix 1: Added threading import and log handle management",
+          lines: [
+            { type: "add", lineno: "", sign: "+", code: "#!/usr/bin/env python3" },
+            { type: "add", lineno: "", sign: "+", code: "import threading" },
+            { type: "add", lineno: "", sign: "+", code: "" },
+            { type: "add", lineno: "", sign: "+", code: "# Global log file handles — kept open for the server's lifetime" },
+            { type: "add", lineno: "", sign: "+", code: "# keyed by model_id -> file handle" },
+            { type: "add", lineno: "", sign: "+", code: "_log_handles = {}" },
+            { type: "add", lineno: "", sign: "+", code: "_log_lock = threading.Lock()" },
+          ]
+        },
+        {
+          comment: "Fix 2: Models config updated with new schema (id, size, desc, devices)",
+          lines: [
+            { type: "del", lineno: "", sign: "-", code: "# ============================================================================" },
+            { type: "del", lineno: "", sign: "-", code: "# Models Registry" },
+            { type: "del", lineno: "", sign: "-", code: "# ============================================================================" },
+            { type: "add", lineno: "", sign: "+", code: "# Models configuration" },
+            { type: "add", lineno: "", sign: "+", code: '    "gpt_oss": {' },
+            { type: "add", lineno: "", sign: "+", code: '        "id": "gpt_oss",' },
+            { type: "add", lineno: "", sign: "+", code: '        "name": "GPT-OSS 20B",' },
+            { type: "add", lineno: "", sign: "+", code: '        "size": "11GB",' },
+            { type: "add", lineno: "", sign: "+", code: '        "desc": "OpenAI\\'s open-source reasoning model",' },
+            { type: "add", lineno: "", sign: "+", code: '        "gpu": "AMD R9700",' },
+            { type: "add", lineno: "", sign: "+", code: '        "devices": ["ROCm0"],' },
+            { type: "add", lineno: "", sign: "+", code: '        "filename": "openai_gpt-oss-20b-Q4_K_M.gguf",' },
+            { type: "add", lineno: "", sign: "+", code: '        "port": 9000,' },
+            { type: "add", lineno: "", sign: "+", code: '        "endpoint": "http://localhost:9000/v1",' },
+            { type: "add", lineno: "", sign: "+", code: '        "logPath": "/tmp/gpt_oss.log"' },
+          ]
+        },
+        {
+          comment: "Fix 3: Added /api/models endpoint",
+          lines: [
+            { type: "add", lineno: "", sign: "+", code: "        elif path == \"/api/models\":" },
+            { type: "add", lineno: "", sign: "+", code: "            self.handle_api_models()" },
+          ]
+        },
+        {
+          comment: "Fix 4: Model existence check before spawning",
+          lines: [
+            { type: "add", lineno: "", sign: "+", code: "        # Check model file exists before spawning" },
+            { type: "add", lineno: "", sign: "+", code: '        if not os.path.exists(model_path):' },
+            { type: "add", lineno: "", sign: "+", code: '            self.send_error_response(400, f"Model file not found: {model_path}")' },
+            { type: "add", lineno: "", sign: "+", code: '            return' },
+          ]
+        },
+        {
+          comment: "Fix 5: Log file handle kept alive (no premature close)",
+          lines: [
+            { type: "del", lineno: "", sign: "-", code: "        # Ensure log file parent directory exists" },
+            { type: "del", lineno: "", sign: "-", code: '        os.makedirs(os.path.dirname(target_model["logPath"]), exist_ok=True)' },
+            { type: "del", lineno: "", sign: "-", code: "        # Spawn in a new session so it outlives parent process" },
+            { type: "del", lineno: "", sign: "-", code: '        log_file = open(target_model["logPath"], "w")' },
+            { type: "del", lineno: "", sign: "-", code: "        subprocess.Popen(" },
+            { type: "del", lineno: "", sign: "-", code: "            cmd_args," },
+            { type: "del", lineno: "", sign: "-", code: "            stdout=log_file," },
+            { type: "del", lineno: "", sign: "-", code: "            stderr=subprocess.STDOUT," },
+            { type: "del", lineno: "", sign: "-", code: "            start_new_session=True" },
+            { type: "del", lineno: "", sign: "-", code: "        )" },
+            { type: "del", lineno: "", sign: "-", code: "        log_file.close()  # ← BUG: closes handle before process finishes!" },
+            { type: "add", lineno: "", sign: "+", code: '        log_dir = os.path.dirname(target_model["logPath"])' },
+            { type: "add", lineno: "", sign: "+", code: '        if log_dir: os.makedirs(log_dir, exist_ok=True)' },
+            { type: "add", lineno: "", sign: "+", code: '        log_file = open(target_model["logPath"], "w", buffering=1)' },
+            { type: "add", lineno: "", sign: "+", code: "        with _log_lock: _log_handles[model_id] = log_file" },
+            { type: "add", lineno: "", sign: "+", code: '        proc = subprocess.Popen(cmd_args, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)' },
+          ]
+        },
+      ]
+    },
+    {
+      title: "index.js — Frontend Changes",
+      file: "index.js",
+      hunks: [
+        {
+          comment: "Fix 6: Added modelConfigs state and fetch function",
+          lines: [
+            { type: "add", lineno: "", sign: "+", code: "let appState = {" },
+            { type: "add", lineno: "", sign: "+", code: '    models: [],' },
+            { type: "add", lineno: "", sign: "+", code: '    host: {},' },
+            { type: "add", lineno: "", sign: "+", code: '    gpus: { nvidia: null, amd: null },' },
+            { type: "add", lineno: "", sign: "+", code: '    modelConfigs: {},   // NEW: fetched from /api/models' },
+          ]
+        },
+        {
+          comment: "Fix 7: Removed hardcoded MODELS object, use API instead",
+          lines: [
+            { type: "del", lineno: "", sign: "-", code: "// Local mock models database for UI labels" },
+            { type: "del", lineno: "", sign: "-", code: "const MODELS = {" },
+            { type: "del", lineno: "", sign: "-", code: '    "gpt_oss": { name: "GPT-OSS 20B" },' },
+            { type: "del", lineno: "", sign: "-", code: '    "phi4": { name: "Phi-4 Q8" },' },
+            { type: "del", lineno: "", sign: "-", code: '    "gemma3_27b": { name: "Gemma 4 31B IT" },' },
+            { type: "del", lineno: "", sign: "-", code: '    "qwen32": { name: "Qwen 3.6 2
