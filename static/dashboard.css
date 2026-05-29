@@ -1,0 +1,1035 @@
+/* ======================================== */
+/* Dashboard Layout & Telemetry Tiles       */
+/* ======================================== */
+
+/* Nexus Container (main content wrapper) */
+.nexus-container {
+    padding: 0.8rem;
+    max-width: 1600px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 1;
+}
+
+/* Legacy alias for backwards compatibility */
+.dashboard {
+    padding: 1.5rem;
+    max-width: 1600px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 1;
+}
+
+/* Telemetry Grid */
+.telemetry-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 0.8rem;
+    margin-bottom: 1rem;
+}
+
+/* Telemetry Tile */
+.telemetry-tile {
+    background: var(--surface-base);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 1rem;
+    position: relative;
+    overflow: hidden;
+    transition: var(--transition-smooth);
+    min-height: 280px;
+    display: flex;
+    flex-direction: column;
+}
+
+.telemetry-tile:before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    opacity: 0.6;
+}
+
+.telemetry-tile.cpu-tile:before {
+    background: linear-gradient(90deg, transparent, var(--cpu-neon), transparent);
+}
+
+.telemetry-tile.ram-tile:before {
+    background: linear-gradient(90deg, transparent, var(--ram-neon), transparent);
+}
+
+.telemetry-tile.nvidia-tile:before {
+    background: linear-gradient(90deg, transparent, var(--nvidia-neon), transparent);
+}
+
+.telemetry-tile.amd-tile:before {
+    background: linear-gradient(90deg, transparent, var(--amd-neon), transparent);
+}
+
+.telemetry-tile:hover {
+    border-color: var(--glass-border-glow);
+    transform: translateY(-2px);
+}
+
+.cpu-tile:hover {
+    box-shadow: 0 8px 32px rgba(181, 126, 255, 0.1), 0 0 1px var(--cpu-neon);
+}
+
+.ram-tile:hover {
+    box-shadow: 0 8px 32px rgba(52, 211, 153, 0.1), 0 0 1px var(--ram-neon);
+}
+
+.nvidia-tile:hover {
+    box-shadow: 0 8px 32px rgba(118, 185, 0, 0.1), 0 0 1px var(--nvidia-neon);
+}
+
+.amd-tile:hover {
+    box-shadow: 0 8px 32px rgba(0, 243, 255, 0.1), 0 0 1px var(--amd-neon);
+}
+
+/* Tile Header */
+.tile-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.8rem;
+}
+
+.tile-label {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.tile-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+}
+
+.cpu-tile .tile-icon {
+    background: rgba(181, 126, 255, 0.1);
+    color: var(--cpu-neon);
+    border: 1px solid rgba(181, 126, 255, 0.2);
+}
+
+.ram-tile .tile-icon {
+    background: rgba(52, 211, 153, 0.1);
+    color: var(--ram-neon);
+    border: 1px solid rgba(52, 211, 153, 0.2);
+}
+
+.nvidia-tile .tile-icon {
+    background: rgba(118, 185, 0, 0.1);
+    color: var(--nvidia-neon);
+    border: 1px solid rgba(118, 185, 0, 0.2);
+}
+
+.amd-tile .tile-icon {
+    background: rgba(0, 243, 255, 0.1);
+    color: var(--amd-neon);
+    border: 1px solid rgba(0, 243, 255, 0.2);
+}
+
+.tile-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.cpu-tile .tile-title { color: var(--cpu-neon); }
+.ram-tile .tile-title { color: var(--ram-neon); }
+.nvidia-tile .tile-title { color: var(--nvidia-neon); }
+.amd-tile .tile-title { color: var(--amd-neon); }
+
+.tile-badge {
+    font-size: 0.6rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+
+/* Tile Body - Center Content Area */
+.tile-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 120px;
+}
+
+/* Circular Gauge (Speedometer) */
+.circular-gauge {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.gauge-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 3px solid var(--bg-dim);
+}
+
+.gauge-ring-progress {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+}
+
+/* CPU Gauge */
+.cpu-tile .gauge-ring {
+    border-color: rgba(181, 126, 255, 0.15);
+}
+
+.cpu-tile .gauge-value {
+    color: var(--cpu-neon);
+    text-shadow: 0 0 20px var(--cpu-glow);
+}
+
+.cpu-tile .gauge-unit {
+    color: rgba(181, 126, 255, 0.6);
+}
+
+.cpu-tile .gauge-ring-progress {
+    border: 3px solid transparent;
+    border-top-color: var(--cpu-neon);
+    border-right-color: var(--cpu-neon);
+    border-radius: 50%;
+    transform: rotate(0deg);
+    transition: transform 0.5s ease;
+    box-shadow: 0 0 15px var(--cpu-glow);
+}
+
+/* RAM Gauge */
+.ram-tile .gauge-ring {
+    border-color: rgba(52, 211, 153, 0.15);
+}
+
+.ram-tile .gauge-value {
+    color: var(--ram-neon);
+    text-shadow: 0 0 20px var(--ram-glow);
+}
+
+.ram-tile .gauge-unit {
+    color: rgba(52, 211, 153, 0.6);
+}
+
+.ram-tile .gauge-ring-progress {
+    border: 3px solid transparent;
+    border-top-color: var(--ram-neon);
+    border-right-color: var(--ram-neon);
+    border-radius: 50%;
+    transform: rotate(0deg);
+    transition: transform 0.5s ease;
+    box-shadow: 0 0 15px var(--ram-glow);
+}
+
+/* NVIDIA Gauge */
+.nvidia-tile .gauge-ring {
+    border-color: rgba(118, 185, 0, 0.15);
+}
+
+.nvidia-tile .gauge-value {
+    color: var(--nvidia-neon);
+    text-shadow: 0 0 20px var(--nvidia-glow);
+}
+
+.nvidia-tile .gauge-unit {
+    color: rgba(118, 185, 0, 0.6);
+}
+
+.nvidia-tile .gauge-ring-progress {
+    border: 3px solid transparent;
+    border-top-color: var(--nvidia-neon);
+    border-right-color: var(--nvidia-neon);
+    border-radius: 50%;
+    transform: rotate(0deg);
+    transition: transform 0.5s ease;
+    box-shadow: 0 0 15px var(--nvidia-glow);
+}
+
+/* AMD Gauge */
+.amd-tile .gauge-ring {
+    border-color: rgba(0, 243, 255, 0.15);
+}
+
+.amd-tile .gauge-value {
+    color: var(--amd-neon);
+    text-shadow: 0 0 20px var(--amd-glow);
+}
+
+.amd-tile .gauge-unit {
+    color: rgba(0, 243, 255, 0.6);
+}
+
+.amd-tile .gauge-ring-progress {
+    border: 3px solid transparent;
+    border-top-color: var(--amd-neon);
+    border-right-color: var(--amd-neon);
+    border-radius: 50%;
+    transform: rotate(0deg);
+    transition: transform 0.5s ease;
+    box-shadow: 0 0 15px var(--amd-glow);
+}
+
+/* Gauge Center Content */
+.gauge-center {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.gauge-value {
+    font-size: 1.5rem;
+    font-weight: 800;
+    font-family: var(--font-mono);
+    line-height: 1;
+}
+
+.gauge-unit {
+    font-size: 0.6rem;
+    font-weight: 600;
+    margin-top: 0.05rem;
+}
+
+.gauge-subtitle {
+    font-size: 0.45rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    max-width: 80px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+}
+
+/* Tile Details Section */
+.tile-details {
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+/* Bar Rows inside Details */
+.detail-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.detail-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    min-width: 70px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+.detail-bar-bg {
+    flex: 1;
+    height: 6px;
+    background: var(--bg-dim);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+}
+
+.detail-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+
+/* CPU bar fill */
+.cpu-bar-fill {
+    background: linear-gradient(90deg, var(--cpu-neon), rgba(181, 126, 255, 0.5));
+    box-shadow: 0 0 8px var(--cpu-glow);
+}
+
+/* RAM bar fill */
+.ram-bar-fill {
+    background: linear-gradient(90deg, var(--ram-neon), rgba(52, 211, 153, 0.5));
+    box-shadow: 0 0 8px var(--ram-glow);
+}
+
+/* VRAM bar fill */
+.vram-bar-fill {
+    background: linear-gradient(90deg, var(--nvidia-neon), rgba(118, 185, 0, 0.5));
+    box-shadow: 0 0 8px var(--nvidia-glow);
+}
+
+/* Temperature bar fill */
+.temp-bar-fill {
+    background: linear-gradient(90deg, var(--nvidia-neon), var(--amber-neon));
+    box-shadow: 0 0 8px var(--nvidia-glow);
+}
+
+/* Power bar fill */
+.power-bar-fill {
+    background: linear-gradient(90deg, var(--amd-neon), rgba(0, 243, 255, 0.5));
+    box-shadow: 0 0 8px var(--amd-glow);
+}
+
+.detail-bar-value {
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    min-width: 50px;
+    text-align: right;
+    font-weight: 600;
+}
+
+/* Clock speed row */
+.clock-speed-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.3rem 0;
+}
+
+.clock-speed-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+.clock-speed-value {
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+/* Model badge inside tile */
+.tile-model-badge {
+    margin-top: auto;
+    padding-top: 1rem;
+}
+
+.model-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 6px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    background: rgba(0, 243, 255, 0.06);
+    border: 1px solid rgba(0, 243, 255, 0.15);
+    color: var(--amd-neon);
+    font-family: var(--font-mono);
+}
+
+.model-badge i {
+    font-size: 0.6rem;
+}
+
+/* Status indicator dot */
+.status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--status-online);
+    box-shadow: 0 0 6px var(--status-online);
+    animation: pulse-glow 2s infinite;
+}
+
+.status-dot.offline {
+    background: var(--status-offline);
+    box-shadow: 0 0 6px var(--status-offline);
+}
+
+.status-dot.loading {
+    background: var(--status-loading);
+    box-shadow: 0 0 6px var(--status-loading);
+}
+
+/* GPU-specific sub-stats */
+.gpu-sub-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.8rem;
+    margin-top: 0.8rem;
+}
+
+.gpu-stat {
+    text-align: center;
+    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.gpu-stat-value {
+    font-size: 1.2rem;
+    font-weight: 800;
+    font-family: var(--font-mono);
+    line-height: 1;
+    margin-bottom: 0.2rem;
+}
+
+.nvidia-tile .gpu-stat-value {
+    color: var(--nvidia-neon);
+}
+
+.amd-tile .gpu-stat-value {
+    color: var(--amd-neon);
+}
+
+.gpu-stat-label {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+/* System Telemetry Section */
+.system-telemetry-section {
+    margin-bottom: 2rem;
+}
+
+/* Nexus Header Actions Area */
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.header-actions .btn {
+    width: 36px;
+    height: 36px;
+    padding: 0.4rem;
+    cursor: pointer;
+    transition: var(--transition-quick);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.02);
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.header-actions .btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+    border-color: var(--glass-border-glow);
+}
+
+.header-actions .btn-glow {
+    position: relative;
+}
+
+.header-actions .btn-success {
+    background: rgba(0, 255, 136, 0.08);
+    border-color: rgba(0, 255, 136, 0.15);
+    color: var(--status-online);
+}
+
+.header-actions .btn-success:hover {
+    background: rgba(0, 255, 136, 0.15);
+    box-shadow: 0 0 12px rgba(0, 255, 136, 0.2);
+}
+
+.header-actions .btn-danger {
+    background: rgba(255, 51, 102, 0.08);
+    border-color: rgba(255, 51, 102, 0.15);
+    color: var(--rose-neon);
+}
+
+.header-actions .btn-danger:hover {
+    background: rgba(255, 51, 102, 0.15);
+    box-shadow: 0 0 12px rgba(255, 51, 102, 0.2);
+}
+
+.header-actions .btn-warning {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.15);
+    color: var(--amber-neon);
+}
+
+.header-actions .btn-warning:hover {
+    background: rgba(245, 158, 11, 0.15);
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.2);
+}
+
+/* Mode Toggle Area */
+.mode-toggle-area {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.mode-switch {
+    position: relative;
+    width: 44px;
+    height: 24px;
+}
+
+.mode-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.mode-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-dim);
+    border-radius: 24px;
+    border: 1px solid var(--glass-border);
+    transition: var(--transition-quick);
+    cursor: pointer;
+}
+
+.mode-slider:before {
+    content: '';
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    left: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: var(--transition-quick);
+}
+
+.mode-switch input:checked + .mode-slider {
+    background: rgba(0, 255, 136, 0.15);
+    border-color: rgba(0, 255, 136, 0.3);
+}
+
+.mode-switch input:checked + .mode-slider:before {
+    transform: translateY(-50%) translateX(20px);
+    background: var(--status-online);
+    box-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+}
+
+.mode-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.mode-label-active {
+    color: var(--status-online);
+    text-shadow: 0 0 8px rgba(0, 255, 136, 0.3);
+}
+
+/* System Status Bar */
+.system-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+/* ======================================== */
+/* Hardware Switchboard Section             */
+/* ======================================== */
+
+.switchboard-section {
+    margin-top: 1rem;
+}
+
+.switchboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.switchboard-header h2 {
+    font-size: 0.85rem;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0;
+}
+
+.switchboard-header .neon-glow-icon {
+    color: var(--status-online);
+}
+
+.switchboard-info {
+    display: flex;
+    align-items: center;
+}
+
+.info-pill {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    border-radius: var(--radius-md);
+    background: rgba(59, 130, 246, 0.06);
+    border: 1px solid rgba(59, 130, 246, 0.15);
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.info-pill i {
+    color: var(--blue-neon);
+    font-size: 0.7rem;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.2rem;
+}
+
+.section-title {
+    font-size: 0.85rem;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.section-title i {
+    color: var(--amd-neon);
+    font-size: 0.8rem;
+}
+
+.section-info {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.8rem;
+    border-radius: var(--radius-md);
+    background: rgba(59, 130, 246, 0.06);
+    border: 1px solid rgba(59, 130, 246, 0.15);
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.section-info i {
+    color: var(--blue-neon);
+    font-size: 0.7rem;
+}
+
+/* Port Containers */
+.ports-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.port-container {
+    background: var(--surface-base);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 1.2rem;
+    transition: var(--transition-smooth);
+}
+
+.port-container:hover {
+    border-color: var(--glass-border-glow);
+    transform: translateY(-1px);
+}
+
+.port-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.port-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.port-status {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.65rem;
+    color: var(--text-muted);
+}
+
+.port-status .status-dot {
+    width: 5px;
+    height: 5px;
+}
+
+.port-model-name {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 0.8rem;
+    font-family: var(--font-mono);
+}
+
+.port-controls {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+/* Model Slots Grid */
+.model-slots-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+}
+
+.model-slot {
+    background: var(--surface-base);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 1.2rem;
+    transition: var(--transition-smooth);
+    min-height: 200px;
+}
+
+.model-slot:hover {
+    border-color: var(--glass-border-glow);
+}
+
+.model-slot.empty {
+    border-style: dashed;
+    border-color: rgba(255, 255, 255, 0.03);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.model-slot.empty .empty-slot {
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.empty-slot i {
+    font-size: 1.5rem;
+    margin-bottom: 0.8rem;
+    opacity: 0.3;
+}
+
+.empty-slot p {
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+/* ======================================== */
+/* Buttons & Controls                       */
+/* ======================================== */
+
+.btn {
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-md);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: var(--transition-quick);
+    border: 1px solid var(--glass-border);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    text-transform: uppercase;
+    font-family: var(--font-sans);
+}
+
+.btn-primary {
+    background: var(--amd-neon);
+    color: var(--bg-deepest);
+    border-color: var(--amd-neon);
+}
+
+.btn-primary:hover {
+    box-shadow: 0 0 15px var(--amd-glow);
+    filter: brightness(1.1);
+}
+
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-secondary);
+    background: var(--surface-base);
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+    border-color: var(--glass-border-glow);
+}
+
+.btn-danger {
+    background: rgba(255, 51, 102, 0.1);
+    color: var(--rose-neon);
+    border-color: rgba(255, 51, 102, 0.2);
+}
+
+.btn-danger:hover {
+    background: rgba(255, 51, 102, 0.2);
+    box-shadow: 0 0 15px var(--rose-glow);
+}
+
+.btn-success {
+    background: rgba(0, 255, 136, 0.1);
+    color: var(--status-online);
+    border-color: rgba(0, 255, 136, 0.2);
+}
+
+.btn-success:hover {
+    background: rgba(0, 255, 136, 0.2);
+    box-shadow: 0 0 15px rgba(0, 255, 136, 0.3);
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.btn-sm {
+    padding: 0.35rem 0.7rem;
+    font-size: 0.65rem;
+}
+
+.btn-icon {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+}
+
+/* ======================================== */
+/* Toast Notifications                      */
+/* ======================================== */
+
+.toast-container {
+    position: fixed !important;
+    top: 0 !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    bottom: auto !important;
+    z-index: var(--z-toast) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0.5rem !important;
+    pointer-events: none !important;
+    width: 100% !important;
+    max-width: 480px !important;
+    padding-top: calc(80px + 0.5rem) !important;
+}
+
+.toast {
+    background: var(--glass-bg-heavy);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 0.8rem 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.8rem;
+    min-width: 280px;
+    max-width: 400px;
+    pointer-events: auto;
+    animation: slide-in-top 0.3s ease forwards;
+    box-shadow: var(--shadow-card);
+}
+
+@keyframes slide-in-top {
+    from {
+        opacity: 0;
+        transform: translateY(-30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.toast.toast-exit {
+    animation: slide-out-top 0.3s ease forwards;
+}
+
+@keyframes slide-out-top {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-30px);
+    }
+}
+
+.toast-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.toast-success .toast-icon { color: var(--status-online); }
+.toast-error .toast-icon { color: var(--rose-neon); }
+.toast-warning .toast-icon { color: var(--amber-neon); }
+.toast-info .toast-icon { color: var(--blue-neon); }
+
+.toast-message {
+    flex: 1;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+
+.toast-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0.2rem;
+    transition: var(--transition-quick);
+}
+
+.toast-close:hover {
+    color: var(--text-primary);
+}
