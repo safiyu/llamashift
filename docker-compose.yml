@@ -1,0 +1,58 @@
+# LlamaShift - Docker Compose Configuration
+# Supports both GPU (NVIDIA/AMD) and CPU-only modes
+#
+# NOTE: Running with --privileged gives the container near-root access to the host.
+# Use only on trusted machines.
+
+services:
+  llamashift:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llamashift:latest
+    container_name: llamashift
+    restart: unless-stopped
+    privileged: true          # Full host access: sees host processes, GPU devices, systemd
+    pid: host                 # Share host PID namespace → can see/kill host llama-server processes
+    network_mode: host         # Use host network → no port mapping needed, same localhost
+    volumes:
+      # Config persistence
+      - ./config.json:/app/config.json
+      # Models directory (adjust path to your models)
+      - ~/models:/root/models
+      # Logs persistence
+      - ~/logs/llamashift:/root/logs/llamashift
+      # Host filesystem (needed for llama-server binary and ROCm/NVIDIA drivers)
+      - /dev:/dev
+      - /run:/run
+      - /tmp:/tmp:rw
+      - /var/run/docker.sock:/var/run/docker.sock   # Optional: if you need Docker-in-Docker
+      - /proc:/proc:rw
+      - /sys:/sys:ro
+      # Allow X11 forwarding (for GPU rendering/debugging)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    environment:
+      - PYTHONUNBUFFERED=1
+      - NVIDIA_VISIBLE_DEVICES=all          # NVIDIA GPU visibility
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility   # NVIDIA driver libs
+      - DISPLAY=:0                         # X11 display
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/api/config"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Device mappings for GPU
+    devices:
+      - /dev/kfd:/dev/kfd          # AMD ROCm
+      - /dev/dri:/dev/dri          # AMD/NVIDIA direct render
+      - /dev/dxg:/dev/dxg          # AMD GPU display
+    # Device cgroup rules (needed for GPU access)
+    device_cgroup_rules:
+      - "c 189:* rmw"   # char device 189 (drm)
+      - "c 226:* rmw"   # char device 226 (drm)
+    # Ulimits for shared memory (important for multiprocessing)
+    shm_size: "8g"
+    stdin_open: true
+    tty: true

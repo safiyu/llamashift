@@ -1,0 +1,197 @@
+/* ======================================== */
+/* PIN Security Overlay Styles              */
+/* ======================================== */
+
+.pin-security-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.95);
+    z-index: var(--z-overlay) !important;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    backdrop-filter: blur(8px);
+    pointer-events: none; /* Allow clicks to pass through to container */
+}
+
+.pin-security-overlay.hidden {
+    display: none;
+}
+
+.pin-security-overlay.open {
+    display: flex;
+}
+
+.pin-security-container {
+    background: var(--surface-base);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 2rem;
+    width: 90%;
+    max-width: 400px;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
+    text-align: center;
+    position: relative;
+    pointer-events: auto; /* Enable clicks on container */
+}
+
+.pin-security-container h2 {
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.pin-security-container p {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 2rem;
+    line-height: 1.4;
+}
+
+/* PIN Display Area */
+.pin-display {
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-bottom: 2rem;
+}
+
+.pin-digit {
+    width: 50px;
+    height: 60px;
+    background: var(--bg-deep);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--nvidia-neon);
+    font-family: var(--font-mono);
+    transition: all 0.2s ease;
+}
+
+.pin-digit.filled {
+    border-color: var(--nvidia-neon);
+    box-shadow: 0 0 15px rgba(118, 185, 0, 0.3);
+}
+
+.pin-digit.error {
+    border-color: var(--rose-neon);
+    box-shadow: 0 0 15px rgba(255, 51, 102, 0.4);
+    animation: shake 0.3s ease-in-out;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+/* Keypad Grid */
+.pin-keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.8rem;
+    margin-bottom: 1.5rem;
+}
+
+.pin-key {
+    background: var(--bg-deep);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 1rem 0;
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.pin-key:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: var(--glass-border-glow);
+    transform: translateY(-2px);
+}
+
+.pin-key:active {
+    transform: translateY(0);
+}
+
+.pin-key.action-btn {
+    font-size: 1rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--nvidia-neon);
+}
+
+.pin-key.clear-btn {
+    color: var(--rose-neon);
+}
+
+/* Create PIN Section */
+.create-pin-section {
+    display: none;
+}
+
+.create-pin-section.active {
+    display: block;
+}
+
+.create-pin-title {
+    font-size: 1.3rem;
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+/* Confirm PIN Section */
+.confirm-pin-section {
+    display: none;
+}
+
+.confirm-pin-section.active {
+    display: block;
+}
+
+.confirm-pin-title {
+    font-size: 1.3rem;
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+.pin-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.5rem;
+}
+
+.pin-error {
+    color: var(--rose-neon);
+    font-size: 0.85rem;
+    margin-top: 1rem;
+    min-height: 1.2em;
+}
+
+/* Verify PIN Section */
+.verify-pin-section {
+    display: none;
+}
+
+.verify-pin-section.active {
+    display: block;
+}
+
+/* Security Lock Icon */
+.security-lock-icon {
+    font-size: 3rem;
+    color: var(--nvidia-neon);
+    margin-bottom: 1rem;
+    text-shadow: 0 0 20px rgba(118, 185, 0, 0.4);
+}

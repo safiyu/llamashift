@@ -1,0 +1,762 @@
+// SAFIYUWS Workstation Manager client-side orchestrator
+
+// State
+let appState = {
+    models: [],
+    host: {},
+    gpus: { nvidia: null, amd: null },
+    activeLogModel: null,
+    logPollIntervalId: null,
+    chatModelId: null,
+    chatHistory: [],
+    isInitialized: false
+};
+
+// SVG Circle circumference for gauges: 2 * Math.PI * r(40) = 251
+const GAUGE_CIRCUMFERENCE = 251;
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    initUI();
+    fetchSystemState(true); // first quick fetch
+
+    // Set up continuous state polling (every 2 seconds)
+    setInterval(() => {
+        fetchSystemState(false);
+    }, 2000);
+
+    // Set up real-time clocks
+    setInterval(updateClock, 1000);
+});
+
+function initUI() {
+    // Header actions
+    document.getElementById('btn-refresh').addEventListener('click', () => {
+        fetchSystemState(true);
+    });
+
+    document.getElementById('btn-stop-all').addEventListener('click', handleStopAll);
+
+    // Console controls
+    document.getElementById('btn-close-console').addEventListener('click', closeConsole);
+    document.getElementById('btn-clear-console').addEventListener('click', () => {
+        document.getElementById('console-content').textContent = '';
+    });
+
+    // Playground controls
+    document.getElementById('btn-playground-toggle').addEventListener('click', togglePlayground);
+    document.getElementById('btn-close-playground').addEventListener('click', closePlayground);
+    document.getElementById('chat-model-select').addEventListener('change', handleChatModelChange);
+    document.getElementById('btn-send-chat').addEventListener('click', handleSendChat);
+    document.getElementById('chat-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSendChat();
+        }
+    });
+}
+
+function updateClock() {
+    const clockNode = document.getElementById('system-time');
+    const now = new Date();
+    clockNode.textContent = now.toTimeString().split(' ')[0];
+}
+
+// REST API calls
+async function fetchSystemState(forceRender = false) {
+    try {
+        // Fetch model status and host stats
+        const statusRes = await fetch('/api/status');
+        if (!statusRes.ok) throw new Error('API server returned error');
+        const statusData = await statusRes.json();
+
+        appState.models = statusData.models;
+        appState.host = statusData.host;
+
+        // Fetch GPU stats
+        const gpuRes = await fetch('/api/gpu');
+        if (gpuRes.ok) {
+            const gpuData = await gpuRes.json();
+            appState.gpus = gpuData;
+        }
+
+        renderDashboard(forceRender);
+        updateChatModelDropdown();
+        appState.isInitialized = true;
+    } catch (err) {
+        console.error('Failed to sync system status:', err);
+    }
+}
+
+function renderDashboard(forceRender = false) {
+    // 1. Host Stats
+    document.getElementById('host-cpu').textContent = appState.host.cpu_load ? appState.host.cpu_load.toFixed(2) : '0.00';
+    document.getElementById('host-ram').textContent = appState.host.mem_pct ? appState.host.mem_pct + '%' : '0%';
+    document.getElementById('host-ram-bar').style.width = appState.host.mem_pct ? appState.host.mem_pct + '%' : '0%';
+
+    // 2. GPU Telemetry
+    updateGpuCard('nvidia', appState.gpus.nvidia);
+    updateGpuCard('amd', appState.gpus.amd);
+
+    // 3. Unified Grid List (build once if forced or not initialized, then update nodes)
+    const grid = document.getElementById('models-grid');
+
+    if (forceRender || !appState.isInitialized || grid.children.length === 0) {
+        grid.innerHTML = '';
+        appState.models.forEach(model => {
+            const card = createModelCardDOM(model);
+            grid.appendChild(card);
+        });
+    } else {
+        // Update nodes selectively to prevent flickering
+        appState.models.forEach(model => {
+            updateModelCardDOM(model);
+        });
+    }
+}
+
+function updateGpuCard(prefix, gpuData) {
+    const activeText = document.getElementById(`${prefix}-active`);
+    const tempText = document.getElementById(`${prefix}-temp`);
+    const tempFill = document.getElementById(`${prefix}-temp-fill`);
+    const loadText = document.getElementById(`${prefix}-load`);
+    const loadFill = document.getElementById(`${prefix}-load-fill`);
+    const vramText = document.getElementById(`${prefix}-vram-text`);
+    const vramBar = document.getElementById(`${prefix}-vram-bar`);
+    const powerText = document.getElementById(`${prefix}-power`);
+
+    // Find running model on this GPU
+    const runningModel = appState.models.find(m => m.gpu.includes(prefix.toUpperCase()) && m.status === 'running');
+    if (runningModel) {
+        activeText.textContent = runningModel.name.toUpperCase();
+        activeText.style.color = prefix === 'nvidia' ? 'var(--nvidia-neon)' : 'var(--amd-neon)';
+        activeText.style.borderColor = prefix === 'nvidia' ? 'rgba(118, 185, 0, 0.3)' : 'rgba(0, 243, 255, 0.3)';
+    } else {
+        activeText.textContent = 'INACTIVE';
+        activeText.style.color = 'var(--text-muted)';
+        activeText.style.borderColor = 'var(--glass-border)';
+    }
+
+    if (gpuData) {
+        // Temp (max expected 100C)
+        const temp = gpuData.temp || 0;
+        tempText.textContent = temp.toFixed(0);
+        const tempPct = Math.min(100, (temp / 90) * 100); // 90C as full scale
+        tempFill.style.strokeDashoffset = GAUGE_CIRCUMFERENCE - (GAUGE_CIRCUMFERENCE * tempPct) / 100;
+
+        // Load (util)
+        const load = gpuData.util || 0;
+        loadText.textContent = load.toFixed(0);
+        loadFill.style.strokeDashoffset = GAUGE_CIRCUMFERENCE - (GAUGE_CIRCUMFERENCE * load) / 100;
+
+        // VRAM
+        const used = gpuData.mem_used || 0;
+        const total = gpuData.mem_total || 0;
+        vramText.textContent = `${used.toLocaleString()} / ${total.toLocaleString()} MiB`;
+        const vramPct = total > 0 ? (used / total) * 100 : 0;
+        vramBar.style.width = `${vramPct}%`;
+
+        // Power
+        powerText.textContent = gpuData.power ? `${gpuData.power.toFixed(1)} W` : 'N/A';
+    } else {
+        tempText.textContent = '--';
+        tempFill.style.strokeDashoffset = GAUGE_CIRCUMFERENCE;
+        loadText.textContent = '--';
+        loadFill.style.strokeDashoffset = GAUGE_CIRCUMFERENCE;
+        vramText.textContent = '0 / 0 MiB';
+        vramBar.style.width = '0%';
+        powerText.textContent = '-- W';
+    }
+}
+
+function createModelCardDOM(model) {
+    const card = document.createElement('div');
+    card.id = `card-${model.id}`;
+
+    // Determine card layout and classes
+    const isDualGpu = model.gpu.includes('Dual') || model.gpu.includes('NVIDIA');
+    card.className = `model-card ${isDualGpu ? 'dual-group-card' : 'amd-group-card'}`;
+
+    // Construct display command
+    const binary = "./build/bin/llama-server";
+    const deviceStr = isDualGpu ? "ROCm0,Vulkan2" : "ROCm0";
+    const modelArg = `~/models/${model.filename}`;
+    const mmprojArg = model.mmproj ? ` \\\n  --mmproj ~/models/${model.mmproj}` : '';
+    const extraArgs = isDualGpu ? "--ctx-size 8192 -np 1" : "-ngl 99 --ctx-size 65536";
+    let extraArgsStr = extraArgs;
+    if (model.extraArgs && model.extraArgs.length > 0) {
+        extraArgsStr += ` \\\n  ${model.extraArgs.join(' ')}`;
+    }
+    const displayCmd = `${binary} \\\n  --model ${modelArg}${mmprojArg} \\\n  --device ${deviceStr} \\\n  ${extraArgsStr} \\\n  --port ${model.port}`;
+
+    card.innerHTML = `
+        <div class="model-card-header">
+            <div class="model-name-wrapper">
+                <span class="model-name">${model.name}</span>
+                <span class="model-endpoint-badge" onclick="copyEndpoint(event, '${model.endpoint}')" title="Click to copy endpoint">
+                    <i class="fa-solid fa-link"></i> ${model.endpoint}
+                </span>
+            </div>
+            <span class="model-status-pill status-stopped" id="status-${model.id}">
+                <i class="fa-solid fa-circle"></i> STOPPED
+            </span>
+        </div>
+        
+        <div class="model-meta-row">
+            <span class="meta-badge size-badge" title="Model VRAM Footprint"><i class="fa-solid fa-weight-hanging"></i> ${model.size}</span>
+            <span class="meta-badge hw-badge ${isDualGpu ? 'dual-hw' : 'amd-hw'}" title="Hardware Engine">
+                <i class="${isDualGpu ? 'fa-solid fa-layer-group' : 'fa-solid fa-microchip'}"></i> 
+                ${isDualGpu ? 'Dual GPU (ROCm+Vulkan)' : 'AMD R9700 (ROCm)'}
+            </span>
+        </div>
+        
+        <div class="model-desc">${model.desc}</div>
+
+        <div class="model-command-preview" id="cmd-${model.id}" title="Execution command">
+            ${displayCmd}
+        </div>
+
+        <div class="model-process-stats" id="stats-${model.id}" style="display: none;">
+            <div class="stat-box">
+                <span class="stat-label">PID</span>
+                <span class="stat-value" id="pid-${model.id}">--</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-label">CPU</span>
+                <span class="stat-value" id="cpu-${model.id}">--</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-label">Memory</span>
+                <span class="stat-value" id="mem-${model.id}">--</span>
+            </div>
+        </div>
+
+        <div class="gpu-details-row" id="uptime-row-${model.id}" style="display: none;">
+            <span>PROCESS UPTIME</span>
+            <span id="uptime-${model.id}" class="telemetry-highlight">00:00</span>
+        </div>
+
+        <div class="model-card-actions">
+            <button class="btn btn-secondary btn-logs" onclick="openConsole('${model.id}')">
+                <i class="fa-solid fa-terminal"></i> LOGS
+            </button>
+            <button class="btn btn-start" id="btn-toggle-${model.id}" onclick="toggleModel('${model.id}')">
+                <i class="fa-solid fa-play"></i> START SERVER
+            </button>
+        </div>
+    `;
+
+    return card;
+}
+
+function updateModelCardDOM(model) {
+    const card = document.getElementById(`card-${model.id}`);
+    if (!card) return;
+
+    const statusPill = document.getElementById(`status-${model.id}`);
+    const statsBox = document.getElementById(`stats-${model.id}`);
+    const uptimeRow = document.getElementById(`uptime-row-${model.id}`);
+    const cmdPreview = document.getElementById(`cmd-${model.id}`);
+
+    const pidVal = document.getElementById(`pid-${model.id}`);
+    const cpuVal = document.getElementById(`cpu-${model.id}`);
+    const memVal = document.getElementById(`mem-${model.id}`);
+    const uptimeVal = document.getElementById(`uptime-${model.id}`);
+    const toggleBtn = document.getElementById(`btn-toggle-${model.id}`);
+
+    if (model.status === 'running') {
+        card.classList.add('running-card');
+
+        statusPill.className = 'model-status-pill status-running';
+        statusPill.innerHTML = '<i class="fa-solid fa-circle-play"></i> RUNNING';
+
+        statsBox.style.display = 'grid';
+        uptimeRow.style.display = 'flex';
+        cmdPreview.style.display = 'none';
+
+        pidVal.textContent = model.pid;
+        cpuVal.textContent = `${model.cpu}%`;
+        memVal.textContent = `${model.memory}%`;
+        uptimeVal.textContent = model.uptime;
+
+        toggleBtn.className = 'btn btn-stop';
+        toggleBtn.innerHTML = '<i class="fa-solid fa-stop"></i> STOP SERVER';
+    } else {
+        card.classList.remove('running-card');
+
+        statusPill.className = 'model-status-pill status-stopped';
+        statusPill.innerHTML = '<i class="fa-solid fa-circle"></i> STOPPED';
+
+        statsBox.style.display = 'none';
+        uptimeRow.style.display = 'none';
+        cmdPreview.style.display = 'block';
+
+        toggleBtn.className = 'btn btn-start';
+        toggleBtn.innerHTML = '<i class="fa-solid fa-play"></i> START SERVER';
+    }
+}
+
+// Copy utilities
+function copyEndpoint(e, endpoint) {
+    const badge = e.target.closest('.model-endpoint-badge');
+    navigator.clipboard.writeText(endpoint).then(() => {
+        // Simple micro glow-toast
+        const oldHtml = badge.innerHTML;
+        badge.innerHTML = '<i class="fa-solid fa-check" style="color: var(--nvidia-neon);"></i> COPIED!';
+        setTimeout(() => {
+            badge.innerHTML = oldHtml;
+        }, 1200);
+    });
+}
+
+// Controller functions
+async function toggleModel(modelId) {
+    const model = appState.models.find(m => m.id === modelId);
+    if (!model) return;
+
+    const toggleBtn = document.getElementById(`btn-toggle-${modelId}`);
+    const statusPill = document.getElementById(`status-${modelId}`);
+
+    if (model.status === 'stopped') {
+        // Start process
+        toggleBtn.disabled = true;
+        statusPill.className = 'model-status-pill status-loading';
+        statusPill.innerHTML = '<i class="fa-solid fa-spinner"></i> DEPLOYING...';
+
+        try {
+            const res = await fetch('/api/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelId })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                // Instantly open logs to watch compilation/server load!
+                openConsole(modelId);
+                // Trigger rapid updates for the next few seconds while spawning
+                let count = 0;
+                const quickPoll = setInterval(() => {
+                    fetchSystemState(false);
+                    count++;
+                    if (count > 5) clearInterval(quickPoll);
+                }, 1000);
+            } else {
+                alert('Launch failed: ' + data.error);
+                fetchSystemState(true);
+            }
+        } catch (err) {
+            alert('API Network Error: ' + err.message);
+            fetchSystemState(true);
+        }
+    } else {
+        // Stop process
+        toggleBtn.disabled = true;
+        statusPill.className = 'model-status-pill status-loading';
+        statusPill.innerHTML = '<i class="fa-solid fa-spinner"></i> SHUTTING DOWN...';
+
+        try {
+            const res = await fetch('/api/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelId })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                fetchSystemState(true);
+            } else {
+                alert('Stop request failed: ' + data.error);
+                fetchSystemState(true);
+            }
+        } catch (err) {
+            alert('API Network Error: ' + err.message);
+            fetchSystemState(true);
+        }
+    }
+}
+
+async function handleStopAll() {
+    if (!confirm('Are you sure you want to stop all running llama-server compute processes?')) return;
+
+    try {
+        const res = await fetch('/api/stop_all', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            fetchSystemState(true);
+        }
+    } catch (err) {
+        alert('Failed to execute stop-all command: ' + err.message);
+    }
+}
+
+// Logs Console Drawer logic
+function openConsole(modelId) {
+    const drawer = document.getElementById('logs-drawer');
+    const modelLabel = document.getElementById('current-log-model');
+    const content = document.getElementById('console-content');
+
+    // Close existing stream
+    if (appState.logPollIntervalId) {
+        clearInterval(appState.logPollIntervalId);
+    }
+
+    appState.activeLogModel = modelId;
+    const model = appState.models.find(m => m.id === modelId);
+    modelLabel.textContent = model ? model.name.toUpperCase() : modelId.toUpperCase();
+
+    // Show drawer
+    drawer.classList.add('open');
+    content.textContent = 'Opening console socket connection...';
+
+    // Poll logs immediately
+    pollLogs();
+
+    // Start continuous log polling (every 1.5 seconds)
+    appState.logPollIntervalId = setInterval(pollLogs, 1500);
+}
+
+function closeConsole() {
+    const drawer = document.getElementById('logs-drawer');
+    drawer.classList.remove('open');
+
+    if (appState.logPollIntervalId) {
+        clearInterval(appState.logPollIntervalId);
+        appState.logPollIntervalId = null;
+    }
+    appState.activeLogModel = null;
+}
+
+async function pollLogs() {
+    if (!appState.activeLogModel) return;
+
+    try {
+        const res = await fetch(`/api/logs?model=${appState.activeLogModel}&lines=150`);
+        if (!res.ok) throw new Error('Log read failure');
+        const data = await res.json();
+
+        const content = document.getElementById('console-content');
+        const body = document.getElementById('console-body');
+        const autoscroll = document.getElementById('autoscroll-toggle').checked;
+
+        content.textContent = data.logs || 'Server log is empty.';
+
+        if (autoscroll) {
+            body.scrollTop = body.scrollHeight;
+        }
+    } catch (err) {
+        console.error('Logs polling error:', err);
+    }
+}
+
+// Chat Playground logic
+function togglePlayground() {
+    const drawer = document.getElementById('playground-drawer');
+    drawer.classList.toggle('open');
+}
+
+function closePlayground() {
+    const drawer = document.getElementById('playground-drawer');
+    drawer.classList.remove('open');
+}
+
+function updateChatModelDropdown() {
+    const select = document.getElementById('chat-model-select');
+    const runningModels = appState.models.filter(m => m.status === 'running');
+
+    const previousSelection = select.value;
+
+    // Clear and keep first option
+    select.innerHTML = '<option value="">-- Select Running Model --</option>';
+
+    runningModels.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name;
+        select.appendChild(opt);
+    });
+
+    // Restore previous selection if still running
+    if (runningModels.some(m => m.id === previousSelection)) {
+        select.value = previousSelection;
+    } else if (select.value === '' && runningModels.length > 0) {
+        // Automatically select the first running model to be helpful!
+        select.value = runningModels[0].id;
+        handleChatModelChange();
+    } else if (runningModels.length === 0) {
+        select.value = '';
+        handleChatModelChange();
+    }
+}
+
+function handleChatModelChange() {
+    const select = document.getElementById('chat-model-select');
+    const modelId = select.value;
+
+    const alertBox = document.getElementById('playground-alert');
+    const chatInput = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('btn-send-chat');
+
+    if (modelId) {
+        appState.chatModelId = modelId;
+        alertBox.style.display = 'none';
+        chatInput.disabled = false;
+        sendBtn.disabled = false;
+
+        // Reset chat history when changing models
+        appState.chatHistory = [];
+        const modelName = appState.modelConfigs[modelId]?.name
+            || appState.models.find(m => m.id === modelId)?.name
+            || 'LLM';
+        const messagesContainer = document.getElementById('chat-messages');
+        messagesContainer.innerHTML = `
+            <div class="chat-bubble assistant-bubble system-message">
+                <div class="bubble-avatar"><i class="fa-solid fa-robot"></i></div>
+                <div class="bubble-content">
+                    <strong>SAFIYUWS Core Playground</strong>
+                    <p>Inference pipeline connected with <strong>${modelName}</strong>. Ready for prompts.</p>
+                </div>
+            </div>
+        `;
+    } else {
+        appState.chatModelId = null;
+        alertBox.style.display = 'flex';
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+        chatInput.value = '';
+    }
+}
+
+async function handleSendChat() {
+    const inputNode = document.getElementById('chat-input');
+    const prompt = inputNode.value.trim();
+    if (!prompt || !appState.chatModelId) return;
+
+    inputNode.value = '';
+    inputNode.disabled = true;
+    document.getElementById('btn-send-chat').disabled = true;
+
+    const messagesContainer = document.getElementById('chat-messages');
+
+    // 1. Add User bubble
+    appendBubble('user', prompt);
+    appState.chatHistory.push({ role: 'user', content: prompt });
+
+    // 2. Add Assistant streaming bubble
+    const assistantId = 'stream-' + Date.now();
+    appendStreamingBubble(assistantId);
+
+    // Scroll messages
+    const body = document.getElementById('playground-body');
+    body.scrollTop = body.scrollHeight;
+
+    const selectedModel = appState.models.find(m => m.id === appState.chatModelId);
+    if (!selectedModel) {
+        replaceStreamingBubbleWithError(assistantId, 'Selected model is no longer active.');
+        resetInputState();
+        return;
+    }
+
+    try {
+        // Truncate chat history to context window (keep system + last N messages)
+        const ctxSize = selectedModel.ctxSize || 32768;
+        let messagesToSend = [...appState.chatHistory];
+        let totalTokens = 0;
+        // Estimate tokens (~4 chars per token) and truncate from oldest
+        for (let i = messagesToSend.length - 1; i >= 0; i--) {
+            totalTokens += Math.ceil(messagesToSend[i].content.length / 4);
+        }
+        while (messagesToSend.length > 0 && totalTokens > ctxSize) {
+            totalTokens -= Math.ceil(messagesToSend[0].content.length / 4);
+            messagesToSend.shift();
+        }
+
+        // SSE streaming request to llama-server OpenAI endpoint
+        const response = await fetch(`${selectedModel.endpoint}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                messages: messagesToSend,
+                temperature: 0.7,
+                max_tokens: 4096,
+                stream: true
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Inference fail (Code ${response.status})`);
+        }
+
+        // Read SSE stream chunk by chunk
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let fullReply = '';
+        const contentEl = document.getElementById(`${assistantId}-content`);
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // keep incomplete line in buffer
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+                const dataStr = trimmed.slice(6); // remove 'data: ' prefix
+                if (dataStr === '[DONE]') {
+                    // Stream complete
+                    appState.chatHistory.push({ role: 'assistant', content: fullReply });
+                    const titleEl = document.getElementById(`${assistantId}-name`);
+                    if (titleEl) {
+                        titleEl.innerHTML = `<span class="chat-model-badge">${selectedModel.name}</span>`;
+                    }
+                    // Mark bubble as non-streaming
+                    contentEl.classList.remove('streaming');
+                    continue;
+                }
+
+                try {
+                    const json = JSON.parse(dataStr);
+                    const delta = json.choices?.[0]?.delta?.content;
+                    if (delta) {
+                        fullReply += delta;
+                        if (contentEl) {
+                            contentEl.textContent = fullReply;
+                            // Auto-scroll
+                            body.scrollTop = body.scrollHeight;
+                        }
+                    }
+                } catch (e) {
+                    // Skip non-JSON SSE lines
+                }
+            }
+        }
+
+        // Stream complete
+        if (contentEl) contentEl.classList.remove('streaming');
+
+    } catch (err) {
+        console.error('Inference error:', err);
+        replaceStreamingBubbleWithError(assistantId, `Failed to obtain completion.\n\n${err.message}`);
+    } finally {
+        resetInputState();
+        body.scrollTop = body.scrollHeight;
+    }
+}
+
+function appendBubble(role, text) {
+    const container = document.getElementById('chat-messages');
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${role}-bubble`;
+
+    const avatarIcon = role === 'user' ? 'fa-user' : 'fa-brain';
+    const authorName = role === 'user' ? 'You' : MODELS[appState.chatModelId]?.name || 'LLM';
+
+    bubble.innerHTML = `
+        <div class="bubble-avatar"><i class="fa-solid ${avatarIcon}"></i></div>
+        <div class="bubble-content">
+            <strong>${authorName}</strong>
+            <p>${escapeHtml(text)}</p>
+        </div>
+    `;
+    container.appendChild(bubble);
+}
+
+function appendThinkingBubble() {
+    const container = document.getElementById('chat-messages');
+    const bubble = document.createElement('div');
+    const id = 'thinking-' + Date.now();
+    bubble.id = id;
+    bubble.className = 'chat-bubble assistant-bubble';
+
+    const authorName = MODELS[appState.chatModelId]?.name || 'LLM';
+
+    bubble.innerHTML = `
+        <div class="bubble-avatar"><i class="fa-solid fa-brain"></i></div>
+        <div class="bubble-content">
+            <strong>${authorName} (THINKING...)</strong>
+            <div class="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </div>
+    `;
+    container.appendChild(bubble);
+    return id;
+}
+
+function removeBubble(id) {
+    const node = document.getElementById(id);
+    if (node) node.remove();
+}
+
+function appendStreamingBubble(assistantId) {
+    const container = document.getElementById('chat-messages');
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble assistant-bubble';
+    bubble.id = assistantId;
+
+    const selectedModel = appState.models.find(m => m.id === appState.chatModelId);
+    const modelName = selectedModel?.name || 'LLM';
+
+    bubble.innerHTML = `
+        <div class="bubble-avatar"><i class="fa-solid fa-brain"></i></div>
+        <div class="bubble-content">
+            <strong id="${assistantId}-name"><span class="chat-model-badge">${modelName}</span> <span class="streaming-label">(streaming...)</span></strong>
+            <div id="${assistantId}-content" class="streaming"><div class="typing-indicator"><span></span><span></span><span></span></div></div>
+        </div>
+    `;
+    container.appendChild(bubble);
+    return assistantId;
+}
+
+function replaceStreamingBubbleWithError(assistantId, errorMsg) {
+    const bubble = document.getElementById(assistantId);
+    if (!bubble) return;
+    const contentEl = document.getElementById(`${assistantId}-content`);
+    const titleEl = document.getElementById(`${assistantId}-name`);
+
+    if (contentEl) {
+        contentEl.classList.remove('streaming');
+        contentEl.innerHTML = `<p class="error-text">${escapeHtml(errorMsg)}</p>`;
+    }
+    if (titleEl) {
+        titleEl.innerHTML = `<span class="chat-model-badge">${errorMsg.includes('no longer active') ? 'ERROR' : 'LLM'}</span>`;
+    }
+}
+
+function resetInputState() {
+    const inputNode = document.getElementById('chat-input');
+    inputNode.disabled = false;
+    inputNode.focus();
+    document.getElementById('btn-send-chat').disabled = false;
+}
+
+function escapeHtml(text) {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+// Local mock models database for UI labels
+const MODELS = {
+    "gpt_oss": { name: "GPT-OSS 20B" },
+    "phi4": { name: "Phi-4 Q8" },
+    "gemma3_27b": { name: "Gemma 4 31B IT" },
+    "qwen32": { name: "Qwen 3.6 27B" },
+    "r1": { name: "DeepSeek R1 Distill 32B" },
+    "qwen3_coder": { name: "Qwen3 Coder 30B A3B" },
+    "llama3_70b": { name: "Llama 3.3 70B Instruct" },
+    "qwen36": { name: "Qwen 3.6 35B A3B Vision" },
+    "qwen3_8b": { name: "Qwen3 8B" }
+};
