@@ -1,8 +1,12 @@
-# LlamaShift
+# 🦙 LlamaShift
 
-A web-based control panel for managing multiple local LLM models with seamless switching between single-port and multi-port modes.
+**Universal LLM Workstation Manager** — A web-based control panel for managing multiple local LLM models with seamless switching between single-port and multi-port modes.
 
-## Features
+![Architecture](https://img.shields.io/badge/Python-3.10%2B-green)
+![License](https://img.shields.io/badge/License-MIT-blue)
+![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-lightgrey)
+
+## ✨ Features
 
 | Feature | Description |
 |---------|-------------|
@@ -16,7 +20,7 @@ A web-based control panel for managing multiple local LLM models with seamless s
 | **Smart Restart** | Cross-platform auto-restart (systemd / Docker / Task Scheduler) |
 | **Web UI** | Dark-themed dashboard at `http://localhost:8002` |
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 ┌─────────────────┐    ┌───────────────────────┐    ┌─────────────────┐
@@ -30,7 +34,9 @@ A web-based control panel for managing multiple local LLM models with seamless s
                        └───────────────────────┘
 ```
 
-## Prerequisites
+---
+
+## 📋 Prerequisites
 
 ### Required (All Platforms)
 
@@ -70,7 +76,9 @@ The installers handle these automatically:
 | **Windows** | Administrator | Task Scheduler, NSSM service, UAC prompt |
 | **Docker** | Docker socket access | Container management, GPU passthrough |
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ### Option A: Interactive Installer (Recommended)
 
@@ -78,8 +86,8 @@ The installers handle these automatically:
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/safiyu/llamashift.git
-cd llamashift
+git clone https://github.com/your-repo/llama-switcher.git
+cd llama-switcher
 
 # 2. Run the installer (installs dependencies, prompts for config)
 chmod +x install_linux_mac.sh
@@ -117,8 +125,8 @@ Both wizards walk through 5 steps:
 ### Option B: Docker (Isolated, No System Changes)
 
 ```bash
-git clone https://github.com/safiyu/llamashift.git
-cd llamashift
+git clone https://github.com/your-repo/llama-switcher.git
+cd llama-switcher
 docker compose up -d --build
 # Open http://localhost:8002
 ```
@@ -129,8 +137,8 @@ docker compose up -d --build
 
 ```bash
 # 1. Clone and install dependencies
-git clone https://github.com/safiyu/llamashift.git
-cd llamashift
+git clone https://github.com/your-repo/llama-switcher.git
+cd llama-switcher
 pip install -r requirements.txt
 
 # 2. Edit config.json
@@ -145,7 +153,9 @@ python3 server.py                # Manual (Ctrl+C to stop)
 sudo bash install_service.sh     # Creates systemd service
 ```
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 ### config.json
 
@@ -206,7 +216,9 @@ curl -X PATCH http://localhost:8002/api/models \
   }'
 ```
 
-## API Endpoints
+---
+
+## 🔌 API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -225,10 +237,12 @@ curl -X PATCH http://localhost:8002/api/models \
 | **GET** | `/api/mcp` | MCP server status |
 | **POST** | `/api/mcp` | Start/stop MCP server |
 
-## File Structure
+---
+
+## 📁 File Structure
 
 ```
-llamashift/
+llama-switcher/
 ├── install_linux_mac.sh       # Linux/macOS installer launcher (bash)
 ├── install_linux_mac.py       # Linux/macOS interactive installer (Python)
 ├── install_windows_gui.ps1    # Windows GUI installer (PowerShell wizard)
@@ -245,18 +259,14 @@ llamashift/
 │
 └── static/
     ├── index.html             # Web UI template
-    ├── base.css               # Base styles
-    ├── variables.css          # CSS variables
-    ├── cards.css              # Card components
-    ├── config.css             # Config panel styles
-    ├── dashboard.css          # Dashboard styles
-    ├── footer.css             # Footer styles
+    ├── index.css              # Dark theme styles
     ├── index.js               # Client-side JavaScript
-    ├── logo.png               # Application logo
-    └── pin-security.css       # Security pin styles
+    └── logo.png               # Application logo
 ```
 
-## Troubleshooting
+---
+
+## 🐛 Troubleshooting
 
 ### Common Errors and Solutions
 
@@ -436,9 +446,9 @@ devices:
   - /dev/kfd:/dev/kfd
   - /dev/dri:/dev/dri
 ```
-> This is less permissive but may not work for all operations. `privileged: true` is recommended for local workstation use.
+> ⚠️ This is less permissive but may not work for all operations. `privileged: true` is recommended for local workstation use.
 
-#### Windows: `PowerShell script cannot be loaded because running scripts is enabled`
+#### Windows: `PowerShell script cannot be loaded because running scripts is disabled`
 
 **Cause:** PowerShell execution policy blocks unsigned scripts.
 
@@ -476,7 +486,9 @@ netstat -ano | findstr :8002
 taskkill /PID <PID> /F
 ```
 
-## Security Notes
+---
+
+## 🔒 Security Notes
 
 | Concern | Details | Mitigation |
 |---------|---------|------------|
@@ -486,7 +498,9 @@ taskkill /PID <PID> /F
 | **Model files** | GGUF files contain proprietary weights | Keep `dataDir` outside the repo; never commit model files |
 | **config.json** | May contain local paths | Already in `.gitignore`; do not share config with real paths |
 
-## System Requirements
+---
+
+## 📊 System Requirements
 
 ### Minimum
 
@@ -519,7 +533,9 @@ taskkill /PID <PID> /F
 | Llama-3.1-70B | Q4_K_M | ~38 GB | ~38 GB |
 | Llama-3.1-70B | Q3_K_S | ~28 GB | ~27 GB |
 
-## Service Management
+---
+
+## 🔄 Service Management
 
 ### Linux (systemd)
 
@@ -563,7 +579,9 @@ docker compose restart
 docker compose logs -f
 ```
 
-## Development
+---
+
+## 🧪 Development
 
 ### Running in Development Mode
 
@@ -576,22 +594,16 @@ python3 server.py
 ### Project Structure for Contributors
 
 ```
-llamashift/
+llama-switcher/
 ├── server.py              # Main Flask server + all API routes
 ├── mcp_server.py          # MCP (Model Context Protocol) server
 ├── config.json            # Runtime configuration
 ├── requirements.txt       # Python dependencies
 ├── static/                # Frontend assets
 │   ├── index.html         # Single-page app template
-│   ├── base.css           # Base styles
-│   ├── variables.css      # CSS variables
-│   ├── cards.css          # Card components
-│   ├── config.css         # Config panel styles
-│   ├── dashboard.css      # Dashboard styles
-│   ├── footer.css         # Footer styles
+│   ├── index.css          # Dark theme with CSS variables
 │   ├── index.js           # Axios-based API client
-│   ├── logo.png           # App icon
-│   └── pin-security.css   # Security pin styles
+│   └── logo.png           # App icon
 ├── install_*.sh           # Linux/macOS installer
 ├── install_*.py           # Python installer logic
 ├── install_*.ps1          # Windows GUI installer
@@ -611,7 +623,9 @@ def api_foo(self):
 # routes["/api/foo"] = "api_foo"
 ```
 
-## Changelog
+---
+
+## 📝 Changelog
 
 ### Latest
 - **Installer improvements**: Directory-based model path input (instead of single file), GGUF scanner
@@ -619,8 +633,10 @@ def api_foo(self):
 - **File renaming**: Clear platform-specific naming (`install_linux_mac.sh`, `install_windows_gui.ps1`, `install_windows.bat`)
 - **Cross-platform**: Unified runtime detection (linux-systemd, linux, windows, docker)
 
-## License
+---
 
-MIT License — See LICENSE for details.
+## 📄 License
+
+**MIT License** — See [LICENSE](LICENSE) for details.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software.
