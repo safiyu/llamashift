@@ -60,3 +60,22 @@ htmlcov/
 
 # Docker
 .dockerignore
+
+# Aider AI cache
+.aider.tags.cache.v4
+.aider.chat.history.md
+.aider.input.history
+
+# Cline AI
+.clineignore
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Editor files
+.DS_Store
+*.sublime-project
+*.sublime-workspace
