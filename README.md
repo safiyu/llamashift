@@ -1,24 +1,45 @@
 # LlamaShift
 
-**LLM Model Manager** — A web-based control panel for managing multiple local LLM models with seamless switching between single-port and multi-port modes.
+**Llama Model Manager** — A powerful, GPU-aware web-based control panel for managing multiple local Llama models with seamless switching between single-port and multi-port modes.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-green)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-lightgrey)
 
+---
+
+## Overview
+
+LlamaShift is a comprehensive LLM model management platform that enables users to run, switch between, and monitor multiple local Llama models through an intuitive web interface. Built on Flask and powered by llama.cpp, LlamaShift provides seamless model switching with GPU acceleration support for both NVIDIA CUDA and AMD ROCm devices.
+
+### Key Capabilities
+
+- **Single-Port Mode**: Run one model at a time on a shared port — ideal for integration with Open WebUI and other LLM frontends that expect a single endpoint.
+- **Multi-Port Mode**: Host multiple models simultaneously, each on its own dedicated port, enabling parallel inference workloads.
+- **GPU-Aware Management**: Auto-detects NVIDIA CUDA and AMD ROCm GPUs, with configurable GPU layer offloading for optimal performance.
+- **Real-Time Monitoring**: Live system stats, GPU memory usage, temperature, and utilization metrics in a dark-themed dashboard.
+- **One-Click Model Switching**: Start, stop, or switch between models instantly from the web interface.
+- **Live Log Streaming**: View model inference logs directly in the browser for real-time monitoring.
+- **MCP Integration**: Model Context Protocol support for AI agent workflows.
+- **Smart Auto-Restart**: Cross-platform service management with automatic recovery (systemd on Linux, Task Scheduler on Windows, Docker restart policies).
+- **OpenAI-Compatible API**: Full OpenAI-style endpoints for easy integration with existing tools and applications.
+
+![Dashboard Screenshot](static/Screenshot.png)
+
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| Single-Port Mode | One model at a time on shared port (ideal for Open WebUI) |
-| Multi-Port Mode | Multiple models simultaneously on different ports |
-| GPU-Aware | Auto-detects NVIDIA CUDA and AMD ROCm, handles GPU conflicts |
-| Real-Time Monitoring | System stats, GPU telemetry, model status dashboard |
-| One-Click Switching | Start, stop, switch models instantly |
-| Live Log Viewer | Stream model logs directly in the UI |
-| MCP Integration | Model Context Protocol support for AI agents |
-| Smart Restart | Cross-platform auto-restart (systemd / Docker / Task Scheduler) |
-| Web UI | Dark-themed dashboard at `http://localhost:8002` |
+| Single-Port Mode | Run one model at a time on shared port — ideal for Open WebUI integration |
+| Multi-Port Mode | Host multiple models simultaneously, each on its own dedicated port |
+| GPU-Aware Management | Auto-detects NVIDIA CUDA and AMD ROCm, configurable GPU layer offloading |
+| Real-Time Monitoring | System stats, GPU memory/temperature/utilization, model status dashboard |
+| One-Click Switching | Start, stop, or switch models instantly from the web interface |
+| Live Log Streaming | View model inference logs directly in the browser |
+| MCP Integration | Model Context Protocol support for AI agent workflows |
+| Smart Auto-Restart | Cross-platform service management (systemd / Task Scheduler / Docker) |
+| OpenAI-Compatible API | Full OpenAI-style endpoints for easy tool integration |
+| Dark Theme UI | Modern, responsive web interface at `http://localhost:8002` |
 
 ## Architecture
 
