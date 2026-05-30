@@ -13,6 +13,8 @@ import sys
 import threading
 import time
 
+from config import IS_WINDOWS
+
 # Global process tracker — keyed by model_id -> Popen proc
 _model_processes = {}
 _proc_lock = threading.Lock()
@@ -474,6 +476,111 @@ def get_gpu_telemetry():
         "nvidia": nvidia_data,
         "amd": amd_data
     }
+
+
+def get_available_devices():
+    """Enumerates available GPU devices for selection."""
+    devices = []
+    
+    # Check for NVIDIA GPUs via nvidia-smi
+    try:
+        res = subprocess.run([
+            "nvidia-smi",
+            "--query-gpu=index,name,memory.total",
+            "--format=csv,noheader,nounits"
+        ], capture_output=True, text=True, timeout=10)
+        if res.returncode == 0 and res.stdout.strip():
+            for line in res.stdout.splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 2:
+                    devices.append({
+                        "id": f"nvidia-{parts[0].strip()}",
+                        "name": parts[1].strip(),
+                        "type": "nvidia",
+                        "vram": float(parts[2]) if len(parts) > 2 else 0.0
+                    })
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    except Exception:
+        pass
+    
+    # Check for AMD GPUs via rocm-smi
+    try:
+        res = subprocess.run([
+            "rocm-smi",
+            "--showid",
+            "--showproductname",
+            "--json"
+        ], capture_output=True, text=True, timeout=10)
+        if res.returncode == 0 and res.stdout.strip():
+            json_line = None
+            for line in res.stdout.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("{"):
+                    json_line = stripped
+                    break
+            if json_line:
+                raw = json.loads(json_line)
+                card = raw.get("card0", {})
+                gpu_name = card.get("Card Series", "AMD Radeon GPU")
+                # rocm-smi doesn't provide VRAM directly, query separately
+                vram_mb = 0.0
+                try:
+                    vram_res = subprocess.run([
+                        "rocm-smi", "--showmeminfo", "vram", "--json"
+                    ], capture_output=True, text=True, timeout=10)
+                    if vram_res.returncode == 0 and vram_res.stdout.strip():
+                        for vline in vram_res.stdout.splitlines():
+                            vstripped = vline.strip()
+                            if vstripped.startswith("{"):
+                                vram_raw = json.loads(vstripped)
+                                vram_card = vram_raw.get("card0", {})
+                                vram_total = vram_card.get("VRAM Total Memory (B)", 0)
+                                vram_mb = float(vram_total) / (1024 * 1024) if vram_total else 0.0
+                                break
+                except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
+                    pass
+                
+                devices.append({
+                    "id": f"amd-0",
+                    "name": gpu_name,
+                    "type": "amd",
+                    "vram": vram_mb
+                })
+    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        pass
+    except Exception:
+        pass
+    
+    # Fallback for Windows AMD detection (via PowerShell)
+    if IS_WINDOWS and not devices:
+        try:
+            ps_cmd = (
+                "Get-CimInstance Win32_VideoController | "
+                "Where-Object { $_.Name -match 'AMD|RADEON|Radeon|Graphics' -and "
+                "$_.Name -notmatch 'NVIDIA|Intel' } | "
+                "Select-Object Name, AdapterRAM | "
+                "ConvertTo-Json -Compress"
+            )
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=10
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                gpu_info = json.loads(res.stdout.strip())
+                if gpu_info:
+                    gpu_name = gpu_info.get("Name", "AMD Radeon GPU")
+                    adapter_ram = gpu_info.get("AdapterRAM", 0)
+                    devices.append({
+                        "id": f"amd-0",
+                        "name": gpu_name,
+                        "type": "amd",
+                        "vram": adapter_ram / (1024 * 1024) if adapter_ram else 0.0
+                    })
+        except Exception:
+            pass
+    
+    return devices
 
 
 def get_process_cmdline(pid):

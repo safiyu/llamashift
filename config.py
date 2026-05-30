@@ -143,7 +143,7 @@ def _ensure_log_dir():
     """Ensure LOG_DIR is initialized from config appName."""
     global LOG_DIR
     if LOG_DIR is None:
-        app_name = _CONFIG.get("appName", "llamashift")
+        app_name = load_config().get("appName", "llamashift")
         LOG_DIR = os.path.join(os.path.expanduser("~/logs"), str(app_name))
     os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -153,7 +153,7 @@ def get_models():
     global _models_cache
     with _models_lock:
         if _models_cache is None:
-            raw = _CONFIG.get("models", {})
+            raw = load_config().get("models", {})
             cache = {}
             for mid, cfg in raw.items():
                 c = dict(cfg)  # shallow copy
@@ -211,3 +211,7 @@ def reset_config_for_testing():
     _CONFIG = None
     _models_cache = None
     LOG_DIR = None
+
+
+# Initialize config at module load so LOG_DIR and _CONFIG are set before any request
+init_config()

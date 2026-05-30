@@ -11,7 +11,7 @@
             "id": "qwen36",
             "name": "Qwen 3.6 35B A3B Vision",
             "size": "27GB",
-            "desc": "Best overall reasoning / coding / multimodal model",
+            "desc": "Best vision language model",
             "gpu": "AMD R9700",
             "devices": [
                 "ROCm0"
@@ -33,79 +33,47 @@
                 "--no-context-shift"
             ]
         },
-        "coder_next": {
-            "id": "coder_next",
-            "name": "Qwen3 Coder Next IQ4_XS",
-            "size": "38GB",
-            "desc": "Primary coding model - 80B MoE, dual GPU split",
-            "gpu": "AMD R9700 + RTX 4060",
-            "filename": "Qwen3-Coder-Next-UD-IQ4_XS.gguf",
-            "port": 9001,
-            "ctxSize": 65152,
+        "qwen36_35b_a3b_q6_k": {
+            "id": "qwen36_35b_a3b_q6_k",
+            "name": "Qwen3.6 35B A3B UD Q6_K",
+            "size": "28GB",
+            "desc": "Best overall reasoning / coding / multimodal model",
+            "gpu": "AMD GPU",
+            "filename": "Qwen3.6-35B-A3B-UD-Q6_K.gguf",
+            "port": 9009,
+            "ctxSize": 63000,
             "devices": [
-                "ROCm0",
-                "Vulkan2"
+                "ROCm0"
             ],
             "nParallel": 1,
-            "endpoint": "http://localhost:9001/v1",
+            "endpoint": "http://localhost:9000/v1",
             "maxTokens": 8192,
             "extraArgs": [
                 "--n-gpu-layers",
-                "90",
+                "99",
                 "--threads",
-                "12",
+                "16",
                 "--threads-batch",
-                "12",
+                "16",
                 "--flash-attn",
                 "on",
+                "--top-k",
+                "0",
+                "--kv-unified",
                 "--cache-type-k",
                 "q4_0",
                 "--cache-type-v",
                 "q4_0",
-                "--temp",
-                "0.6",
-                "--top-p",
-                "0.95",
-                "--top-k",
-                "40",
-                "--min-p",
-                "0.05",
-                "--repeat-penalty",
-                "1.03",
-                "--batch-size",
-                "1024",
-                "--ubatch-size",
-                "256",
-                "--cache-ram", "0"
-            ]
-        },
-        "qwen36_uncensored": {
-            "id": "qwen36_uncensored",
-            "name": "Qwen 3.6 35B A3B Uncensored",
-            "size": "27GB",
-            "desc": "Creative / uncensored experimental model",
-            "gpu": "AMD R9700",
-            "devices": [
-                "ROCm0"
+                "--spec-type",
+                "draft-mtp",
+                "--cache-ram",
+                "28768"
             ],
-            "filename": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q5_K_P.gguf",
-            "port": 9002,
-            "ctxSize": 128768,
-            "nParallel": 1,
-            "endpoint": "http://localhost:9002/v1",
-            "maxTokens": 8192,
-            "extraArgs": [
-                "--flash-attn",
-                "on",
-                "--temp",
-                "1.15",
-                "--top-p",
-                "0.97",
-                "--top-k",
-                "50",
-                "--min-p",
-                "0.02"
-            ]
+            "nGpuLayers": 99,
+            "batchSize": 2048,
+            "threads": 0,
+            "temperature": 0.7,
+            "topP": 0.9
         },
         "qwen27": {
             "id": "qwen27",
@@ -251,5 +219,10 @@
                 "0.01"
             ]
         }
-    }
+    },
+    "adminPinSalt": "d1s7qs8i22qxogd4",
+    "adminPinHash": "6feb58716ab151c13e18a5e7d25785c5c7633172eb9b88b6ec43ec169554dc3f",
+    "pinHash": "703dcc2e1738f7ec49f1b829e077171f4c3d6d0a593d485e5640885226f3384d",
+    "pinSalt": "cdd7b6997ca6960369f32153c23f3398",
+    "pinSetAt": 1780162869
 }
