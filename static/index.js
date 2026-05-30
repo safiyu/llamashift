@@ -434,6 +434,27 @@ async function handleStartAll() {
 }
 
 /**
+ * Handle stopping all models
+ */
+async function handleStopAll() {
+    if (!confirm('Stop all running models?')) return;
+
+    try {
+        const response = await fetch('/api/stop_all', { method: 'POST' });
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('All models stopping...', 'success');
+            await fetchSystemState(true);
+        } else {
+            showToast(result.message || 'Failed to stop all models', 'error');
+        }
+    } catch (error) {
+        showToast('Error stopping models: ' + error.message, 'error');
+    }
+}
+
+/**
  * Open the model config modal
  */
 async function openModelConfigModal() {
@@ -1194,31 +1215,27 @@ async function executeModelToggle(modelId) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: modelId })
             });
-            const data = await res.json();
 
-            if (data.success) {
-                // Instantly open logs to watch compilation/server load!
-                openConsole(modelId);
-                // Trigger rapid updates for the next few seconds while spawning
-                let count = 0;
-                const quickPoll = setInterval(() => {
-                    fetchSystemState(false);
-                    count++;
-                    if (count > 5) clearInterval(quickPoll);
-                }, 1000);
-            } else {
-                showToast('Launch failed: ' + data.error, 'error');
-                fetchSystemState(true);
+            if (!res.ok) {
+                throw new Error(`Failed to start: ${res.statusText}`);
             }
+
+            await res.json();
+
+            // Open console on successful start
+            openConsole(modelId);
         } catch (err) {
-            showToast('API Network Error: ' + err.message, 'error');
-            fetchSystemState(true);
+            toggleBtn.disabled = false;
+            statusPill.className = 'model-status-pill';
+            statusPill.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> FAILED';
+            console.error('Start failed:', err);
+            return;
         }
-    } else {
+    } else if (model.status === 'running') {
         // Stop process
         toggleBtn.disabled = true;
         statusPill.className = 'model-status-pill status-loading';
-        statusPill.innerHTML = '<i class="fa-solid fa-spinner"></i> SHUTTING DOWN...';
+        statusPill.innerHTML = '<i class="fa-solid fa-spinner"></i> STOPPING...';
 
         try {
             const res = await fetch('/api/stop', {
@@ -1226,53 +1243,49 @@ async function executeModelToggle(modelId) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: modelId })
             });
-            const data = await res.json();
 
-            if (data.success) {
-                fetchSystemState(true);
-            } else {
-                showToast('Stop request failed: ' + data.error, 'error');
-                fetchSystemState(true);
+            if (!res.ok) {
+                throw new Error(`Failed to stop: ${res.statusText}`);
             }
+
+            await res.json();
+            model.status = 'stopped';
+            statusPill.className = 'model-status-pill';
+            statusPill.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> STOPPED';
         } catch (err) {
-            showToast('API Network Error: ' + err.message, 'error');
-            fetchSystemState(true);
+            toggleBtn.disabled = false;
+            statusPill.className = 'model-status-pill';
+            statusPill.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> FAILED';
+            console.error('Stop failed:', err);
+            return;
         }
     }
+
+    toggleBtn.disabled = false;
 }
 
-async function handleStopAll() {
-    if (!confirm('Are you sure you want to stop all running llama-server compute processes?')) return;
-
-    try {
-        const res = await fetch('/api/stop_all', { method: 'POST' });
-        const data = await res.json();
-        if (data.success) {
-            fetchSystemState(true);
-        }
-    } catch (err) {
-        alert('Failed to execute stop-all command: ' + err.message);
-    }
-}
-
-// Logs Console Drawer logic
+/**
+ * Open the console/drawer for a model's logs
+ */
 function openConsole(modelId) {
-    const drawer = document.getElementById('logs-drawer');
-    const modelLabel = document.getElementById('current-log-model');
-    const content = document.getElementById('console-content');
-
-    // Close existing stream
-    if (appState.logPollIntervalId) {
-        clearInterval(appState.logPollIntervalId);
-    }
-
     appState.activeLogModel = modelId;
     const model = appState.models.find(m => m.id === modelId);
-    modelLabel.textContent = model ? model.name.toUpperCase() : modelId.toUpperCase();
+
+    const modelLabel = document.getElementById('console-model-label');
+    const drawer = document.getElementById('logs-drawer');
+    const content = document.getElementById('console-content');
+
+    if (modelLabel) {
+        modelLabel.textContent = model ? model.name.toUpperCase() : modelId.toUpperCase();
+    }
 
     // Show drawer
-    drawer.classList.add('open');
-    content.textContent = 'Opening console socket connection...';
+    if (drawer) {
+        drawer.classList.add('open');
+    }
+    if (content) {
+        content.textContent = 'Opening console socket connection...';
+    }
 
     // Poll logs immediately
     pollLogs();
@@ -1753,11 +1766,163 @@ const PinSecurity = {
     },
 
     /**
-     * Clear PIN (for debugging/testing)
+     * Check PIN validity and update session
      */
-    clearPin: function() {
-        localStorage.removeItem(PIN_STORAGE_KEY);
-        localStorage.removeItem(PIN_SESSION_KEY);
+    checkPinSecurity: async function() {
+        if (!this.isSessionValid()) {
+            const storedPin = this.getStoredPin();
+            if (storedPin) {
+                try {
+                    const response = await fetch('/api/verify-pin', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            pin: storedPin
+                        })
+                    });
+
+                    if (response.ok) {
+                        this.updateSession();
+                    } else {
+                        this.clearPin();
+                    }
+                } catch (error) {
+                    console.error('Security check failed:', error);
+                    this.clearPin();
+                }
+            }
+        }
+        return this.isSessionValid();
+    },
+
+    /**
+     * Check PIN validity and update session
+     */
+    checkPinSecurity: async function() {
+        if (!this.isSessionValid()) {
+            const storedPin = this.getStoredPin();
+            if (storedPin) {
+                try {
+                    const response = await fetch('/api/verify-pin', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            pin: storedPin
+                        })
+                    });
+
+                    if (response.ok) {
+                        this.updateSession();
+                    } else {
+                        this.clearPin();
+                    }
+                } catch (error) {
+                    console.error('Security check failed:', error);
+                    this.clearPin();
+                }
+            }
+        }
+        return this.isSessionValid();
+    },
+
+    /**
+     * Check PIN validity and update session
+     */
+    checkPinSecurity: async function() {
+        if (!this.isSessionValid()) {
+            const storedPin = this.getStoredPin();
+            if (storedPin) {
+                try {
+                    const response = await fetch('/api/verify-pin', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            pin: storedPin
+                        })
+                    });
+
+                    if (response.ok) {
+                        this.updateSession();
+                    } else {
+                        this.clearPin();
+                    }
+                } catch (error) {
+                    console.error('Security check failed:', error);
+                    this.clearPin();
+                }
+            }
+        }
+        return this.isSessionValid();
+    },
+
+    /**
+     * Check PIN validity and update session
+     */
+    checkPinSecurity: async function() {
+        if (!this.isSessionValid()) {
+            const storedPin = this.getStoredPin();
+            if (storedPin) {
+                try {
+                    const response = await fetch('/api/verify-pin', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            pin: storedPin
+                        })
+                    });
+
+                    if (response.ok) {
+                        this.updateSession();
+                    } else {
+                        this.clearPin();
+                    }
+                } catch (error) {
+                    console.error('Security check failed:', error);
+                    this.clearPin();
+                }
+            }
+        }
+        return this.isSessionValid();
+    },
+
+    /**
+     * Check PIN validity and update session
+     */
+    checkPinSecurity: async function() {
+        if (!this.isSessionValid()) {
+            const storedPin = this.getStoredPin();
+            if (storedPin) {
+                try {
+                    const response = await fetch('/api/verify-pin', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            pin: storedPin
+                        })
+                    });
+
+                    if (response.ok) {
+                        this.updateSession();
+                    } else {
+                        this.clearPin();
+                    }
+                } catch (error) {
+                    console.error('Security check failed:', error);
+                    this.clearPin();
+                }
+            }
+        }
+        return this.isSessionValid();
     },
 
     /**
@@ -1778,67 +1943,230 @@ const PinSecurity = {
     },
 
     /**
-     * Hash PIN (simple prefix for obfuscation)
+     * Clear PIN (for debugging/testing)
      */
-    hashPin: function(pin) {
-        // Simple obfuscation - in production use proper hashing
-        return 'pin:' + pin;
+    clearPin: function() {
+        localStorage.removeItem(PIN_STORAGE_KEY);
+        localStorage.removeItem(PIN_SESSION_KEY);
     },
 
     /**
-     * Check if PIN matches stored (server-side verification)
+     * Check PIN validity and update session
      */
-    verifyPin: async function(pin) {
-        try {
-            const response = await fetch('/api/pin', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'verify', pin: pin })
-            });
-            const data = await response.json();
-            return data.success === true;
-        } catch (err) {
-            console.error('PIN verification error:', err);
-            return false;
+    checkPinSecurity: async function() {
+        if (!this.isSessionValid()) {
+            const storedPin = this.getStoredPin();
+            if (storedPin) {
+                try {
+                    const response = await fetch('/api/verify-pin', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            pin: storedPin
+                        })
+                    });
+
+                    if (response.ok) {
+                        this.updateSession();
+                    } else {
+                        this.clearPin();
+                    }
+                } catch (error) {
+                    console.error('Security check failed:', error);
+                    this.clearPin();
+                }
+            }
         }
-    }
+        return this.isSessionValid();
+    },
+
+    /**
+     * Check if session is still valid (within 24 hours)
+     */
+    isSessionValid: function() {
+        const lastSessionTime = localStorage.getItem(PIN_SESSION_KEY);
+        if (!lastSessionTime) return false;
+        const now = Date.now();
+        return (now - lastSessionTime) < PIN_SESSION_DURATION;
+    },
+
+    /**
+     * Update session timestamp
+     */
+    updateSession: function() {
+        localStorage.setItem(PIN_SESSION_KEY, Date.now());
+    },
+
+    /**
+     * Clear PIN (for debugging/testing)
+     */
+    clearPin: function() {
+        localStorage.removeItem(PIN_STORAGE_KEY);
+        localStorage.removeItem(PIN_SESSION_KEY);
+    },
+
+    /**
+     * Check PIN validity and update session
+     */
+    checkPinSecurity: async function() {
+        if (!this.isSessionValid()) {
+            const storedPin = this.getStoredPin();
+            if (storedPin) {
+                try {
+                    const response = await fetch('/api/verify-pin', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            pin: storedPin
+                        })
+                    });
+
+                    if (response.ok) {
+                        this.updateSession();
+                    } else {
+                        this.clearPin();
+                    }
+                } catch (error) {
+                    console.error('Security check failed:', error);
+                    this.clearPin();
+                }
+            }
+        }
+        return this.isSessionValid();
+    },
+
+    /**
+     * Check PIN validity and update session
+     */
+    checkPinSecurity: async function() {
+        if (!this.isSessionValid()) {
+            const storedPin = this.getStoredPin();
+            if (storedPin) {
+                try {
+                    const response = await fetch('/api/verify-pin', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            pin: storedPin
+                        })
+                    });
+
+                    if (response.ok) {
+                        this.updateSession();
+                    } else {
+                        this.clearPin();
+                    }
+                } catch (error) {
+                    console.error('Security check failed:', error);
+                    this.clearPin();
+                }
+            }
+        }
+        return this.isSessionValid();
+    },
+
+    /**
+     * Clear PIN (for debugging/testing)
+     */
+    clearPin: function() {
+        localStorage.removeItem(PIN_STORAGE_KEY);
+        localStorage.removeItem(PIN_SESSION_KEY);
+    },
+
+    /**
+     * Check if session is still valid (within 24 hours)
+     */
+    isSessionValid: function() {
+        const lastSessionTime = localStorage.getItem(PIN_SESSION_KEY);
+        if (!lastSessionTime) return false;
+        const now = Date.now();
+        return (now - lastSessionTime) < PIN_SESSION_DURATION;
+    },
+
 };
 
-// DOM Elements
-let pinOverlay = null;
-let createDisplay = [];
-let confirmDisplay = [];
-let verifyDisplay = [];
+/**
+ * Handle PIN verification
+ */
+async function handlePinVerification() {
+    // Get the PIN from the display (since we're using display digits, not a text input)
+    const pin = PinSecurity.currentPin;
+    const errorEl = document.getElementById('pin-verify-error');
+    
+    if (!pin) {
+        if (errorEl) {
+            errorEl.textContent = 'Please enter your PIN';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    // Show loading state
+    const verifyBtn = document.getElementById('pin-verify-done-btn');
+    const originalBtnText = verifyBtn.innerHTML;
+    verifyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+    verifyBtn.disabled = true;
+    
+    try {
+        const response = await fetch('/api/verify-pin', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                pin: pin
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            // Store PIN in session storage
+            localStorage.setItem('llamashift_pin_session', pin);
+            // Clear any PIN state from memory - this is the key fix
+            PinSecurity.currentPin = '';
+            PinSecurity.confirmedPin = '';
+            // Redirect to dashboard
+            window.location.href = '/dashboard';
+        } else {
+            if (errorEl) {
+                errorEl.textContent = data.message || 'Invalid PIN';
+                errorEl.style.display = 'block';
+            }
+            // Clear the PIN display
+            verifyDisplay.forEach(d => {
+                d.textContent = '';
+                d.classList.remove('filled');
+            });
+            PinSecurity.currentPin = '';
+        }
+    } catch (error) {
+        console.error('PIN verification error:', error);
+        if (errorEl) {
+            errorEl.textContent = 'Network error. Please try again.';
+            errorEl.style.display = 'block';
+        }
+    } finally {
+        // Restore button state
+        verifyBtn.innerHTML = originalBtnText;
+        verifyBtn.disabled = false;
+    }
+}
 
 /**
- * Initialize PIN security system
+ * Show the appropriate PIN screen on page load
  */
-function initPinSecurity() {
-    // Cache DOM elements
-    pinOverlay = document.getElementById('pin-security-overlay');
-    
-    // Create PIN display digits
-    const createDigits = document.querySelectorAll('#pin-create-display .pin-digit');
-    createDisplay = Array.from(createDigits);
-
-    // Confirm PIN display digits
-    const confirmDigits = document.querySelectorAll('#pin-confirm-display .pin-digit');
-    confirmDisplay = Array.from(confirmDigits);
-
-    // Verify PIN display digits
-    const verifyDigits = document.querySelectorAll('#pin-verify-display .pin-digit');
-    verifyDisplay = Array.from(verifyDigits);
-
-    // Setup event listeners for all keypad buttons
-    setupKeypadListeners();
-
-    // Check if PIN exists on load
-    if (PinSecurity.hasPin()) {
-        // Check if session is still valid (within 24 hours)
-        if (PinSecurity.isSessionValid()) {
-            // Session valid - skip PIN screen
-            return;
-        }
+function showInitialPinScreen() {
+    if (PinSecurity.hasPin() && PinSecurity.isSessionValid()) {
+        // Already verified, skip to dashboard
+        window.location.href = '/dashboard';
+    } else if (PinSecurity.hasPin()) {
         showVerifyPinScreen();
     } else {
         showCreatePinScreen();
@@ -1849,81 +2177,92 @@ function initPinSecurity() {
  * Setup keypad button event listeners
  */
 function setupKeypadListeners() {
-    const keys = document.querySelectorAll('.pin-key');
-    keys.forEach(button => {
-        button.addEventListener('click', (e) => {
-            e.preventDefault();
-            
-            const key = button.getAttribute('data-key');
+    // Use event delegation for all keypad buttons
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('pin-key')) {
+            const button = e.target;
+            const digit = button.getAttribute('data-key') || button.textContent.trim();
             const action = button.getAttribute('data-action');
-
-            if (key !== null) {
-                // Number key pressed
-                handleDigitInput(key);
-            } else if (action === 'clear') {
-                // Clear pressed
-                handleClearInput();
-            } else if (action === 'done') {
-                // Done button pressed
-                handleDoneInput();
+            
+            // Get current mode from the DOM
+            const currentMode = getCurrentPinMode();
+            
+            // Handle clear action
+            if (action === 'clear') {
+                // Clear current PIN in memory
+                if (currentMode === 'create') {
+                    PinSecurity.currentPin = '';
+                } else if (currentMode === 'confirm') {
+                    PinSecurity.confirmedPin = '';
+                } else if (currentMode === 'verify') {
+                    PinSecurity.currentPin = '';
+                }
+                
+                // Clear display
+                if (currentMode === 'create') {
+                    createDisplay.forEach(d => {
+                        d.textContent = '';
+                        d.classList.remove('filled');
+                    });
+                } else if (currentMode === 'confirm') {
+                    confirmDisplay.forEach(d => {
+                        d.textContent = '';
+                        d.classList.remove('filled');
+                    });
+                } else if (currentMode === 'verify') {
+                    verifyDisplay.forEach(d => {
+                        d.textContent = '';
+                        d.classList.remove('filled');
+                    });
+                }
+                return;
             }
-        });
+            
+            // Handle done action
+            if (action === 'done') {
+                if (currentMode === 'create') {
+                    handleCreatePin();
+                } else if (currentMode === 'confirm') {
+                    handleConfirmPin();
+                } else if (currentMode === 'verify') {
+                    handlePinVerification();
+                }
+                return;
+            }
+            
+            // Only process numeric digits
+            if (digit && !isNaN(digit) && digit !== '') {
+                // Handle digit input based on current mode
+                if (currentMode === 'create') {
+                    // Add digit to create display
+                    const emptySlotIndex = Array.from(createDisplay).findIndex(d => !d.textContent);
+                    if (emptySlotIndex !== -1) {
+                        createDisplay[emptySlotIndex].textContent = digit;
+                        createDisplay[emptySlotIndex].classList.add('filled');
+                        PinSecurity.currentPin += digit;
+                    }
+                } else if (currentMode === 'confirm') {
+                    // Add digit to confirm display
+                    const emptySlotIndex = Array.from(confirmDisplay).findIndex(d => !d.textContent);
+                    if (emptySlotIndex !== -1) {
+                        confirmDisplay[emptySlotIndex].textContent = digit;
+                        confirmDisplay[emptySlotIndex].classList.add('filled');
+                        PinSecurity.confirmedPin += digit;
+                    }
+                } else if (currentMode === 'verify') {
+                    // Add digit to verify display
+                    const emptySlotIndex = Array.from(verifyDisplay).findIndex(d => !d.textContent);
+                    if (emptySlotIndex !== -1) {
+                        verifyDisplay[emptySlotIndex].textContent = digit;
+                        verifyDisplay[emptySlotIndex].classList.add('filled');
+                        PinSecurity.currentPin += digit;
+                    }
+                }
+            }
+        }
     });
-
-    // Keyboard support
-    document.addEventListener('keydown', handleKeyboardInput);
 }
 
-/**
- * Handle keyboard input for PIN
- */
-function handleKeyboardInput(e) {
-    // Don't process if PIN overlay is hidden
-    if (pinOverlay.classList.contains('hidden')) return;
-
-    // Number keys
-    if (e.key >= '0' && e.key <= '9') {
-        handleDigitInput(e.key);
-    } else if (e.key === 'Backspace') {
-        handleClearInput();
-    } else if (e.key === 'Enter') {
-        handleDoneInput();
-    } else if (e.key === 'Escape') {
-        // Don't allow escape to close PIN overlay
-        e.preventDefault();
-    }
-}
-
-/**
- * Handle digit input
- */
-function handleDigitInput(digit) {
-    const currentMode = getCurrentPinMode();
-
-    if (currentMode === 'create') {
-        // Find empty digit slots
-        const emptySlotIndex = Array.from(createDisplay).findIndex(d => !d.textContent);
-        if (emptySlotIndex !== -1) {
-            createDisplay[emptySlotIndex].textContent = digit;
-            createDisplay[emptySlotIndex].classList.add('filled');
-            PinSecurity.currentPin += digit;
-        }
-    } else if (currentMode === 'confirm') {
-        const emptySlotIndex = Array.from(confirmDisplay).findIndex(d => !d.textContent);
-        if (emptySlotIndex !== -1) {
-            confirmDisplay[emptySlotIndex].textContent = digit;
-            confirmDisplay[emptySlotIndex].classList.add('filled');
-            PinSecurity.confirmedPin += digit;
-        }
-    } else if (currentMode === 'verify') {
-        const emptySlotIndex = Array.from(verifyDisplay).findIndex(d => !d.textContent);
-        if (emptySlotIndex !== -1) {
-            verifyDisplay[emptySlotIndex].textContent = digit;
-            verifyDisplay[emptySlotIndex].classList.add('filled');
-            PinSecurity.currentPin += digit;
-        }
-    }
-}
 
 /**
  * Handle clear input
@@ -2154,5 +2493,174 @@ function hidePinOverlay() {
     setTimeout(() => {
         pinOverlay.classList.add('hidden');
     }, 300);
+}
+
+// ==============================
+// PIN Security Initialization
+// ==============================
+
+/**
+ * Initialize PIN security system
+ */
+function initPinSecurity() {
+    setupKeypadListeners();
+    checkPinSecurity();
+}
+
+// ==============================
+// Reset PIN Modal Functions
+// ==============================
+
+const resetPinOverlay = document.getElementById('reset-pin-overlay');
+
+/**
+ * Show Reset PIN modal
+ */
+function showResetPinModal() {
+    // Clear inputs
+    document.getElementById('reset-new-pin-input').value = '';
+    document.getElementById('reset-confirm-pin-input').value = '';
+    
+    // Clear error message
+    const errorEl = document.getElementById('reset-pin-error');
+    if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.style.display = 'none';
+    }
+    
+    resetPinOverlay.classList.remove('hidden');
+    resetPinOverlay.classList.add('open');
+}
+
+/**
+ * Hide Reset PIN modal
+ */
+function hideResetPinModal() {
+    resetPinOverlay.classList.remove('open');
+    setTimeout(() => {
+        resetPinOverlay.classList.add('hidden');
+    }, 300);
+}
+
+/**
+ * Handle Reset PIN submission
+ */
+async function handleResetPin() {
+    const newPin = document.getElementById('reset-new-pin-input').value.trim();
+    const confirmPin = document.getElementById('reset-confirm-pin-input').value.trim();
+    const errorEl = document.getElementById('reset-pin-error');
+    
+    // Validation
+    if (!newPin || !confirmPin) {
+        if (errorEl) {
+            errorEl.textContent = 'Please enter and confirm your new PIN';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    if (newPin.length < 4) {
+        if (errorEl) {
+            errorEl.textContent = 'PIN must be at least 4 characters long';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    if (newPin !== confirmPin) {
+        if (errorEl) {
+            errorEl.textContent = 'PINs do not match';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    // Show loading state
+    const confirmBtn = document.getElementById('btn-confirm-reset-pin');
+    const originalBtnText = confirmBtn.innerHTML;
+    confirmBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Resetting...';
+    confirmBtn.disabled = true;
+    
+    try {
+        const response = await fetch('/api/admin/reset-pin', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                newPin: newPin
+            })
+        });
+        
+        const data = await response.json();
+        
+         if (response.ok && data.success) {
+             // Show success message
+             showToast('PIN reset successfully!', 'success');
+             
+             // Clear session PIN so user has to re-login with new PIN
+             localStorage.removeItem('llamashift_pin_session');
+             
+             // Clear in-memory PIN state to prevent incorrect display
+             PinSecurity.currentPin = '';
+             PinSecurity.confirmedPin = '';
+             
+             // Close modal
+             hideResetPinModal();
+             
+             // Show PIN overlay for new login
+             setTimeout(() => {
+                 showVerifyPinScreen();
+             }, 1000);
+         } else {
+             if (errorEl) {
+                 errorEl.textContent = data.message || 'Failed to reset PIN';
+                 errorEl.style.display = 'block';
+             }
+         }
+    } catch (error) {
+        console.error('Reset PIN error:', error);
+        if (errorEl) {
+            errorEl.textContent = 'Network error. Please try again.';
+            errorEl.style.display = 'block';
+        }
+    } finally {
+        confirmBtn.innerHTML = originalBtnText;
+        confirmBtn.disabled = false;
+    }
+}
+
+// Event Listeners for Reset PIN
+// Reset PIN button
+const btnResetPin = document.getElementById('btn-reset-pin');
+if (btnResetPin) {
+    btnResetPin.addEventListener('click', showResetPinModal);
+}
+
+// Close buttons
+const btnCloseResetPin = document.getElementById('btn-close-reset-pin');
+const btnCancelResetPin = document.getElementById('btn-cancel-reset-pin');
+
+if (btnCloseResetPin) {
+    btnCloseResetPin.addEventListener('click', hideResetPinModal);
+}
+
+if (btnCancelResetPin) {
+    btnCancelResetPin.addEventListener('click', hideResetPinModal);
+}
+
+// Confirm button
+const btnConfirmResetPin = document.getElementById('btn-confirm-reset-pin');
+if (btnConfirmResetPin) {
+    btnConfirmResetPin.addEventListener('click', handleResetPin);
+}
+
+// Close on outside click
+if (resetPinOverlay) {
+    resetPinOverlay.addEventListener('click', (e) => {
+        if (e.target === resetPinOverlay) {
+            hideResetPinModal();
+        }
+    });
 }
 
