@@ -224,6 +224,14 @@ function initUI() {
     if (btnConfirmImport) {
         btnConfirmImport.addEventListener('click', handleImportModels);
     }
+
+    // Security PIN button
+    const btnPinSecurity = document.getElementById('btn-pin-security');
+    if (btnPinSecurity) {
+        btnPinSecurity.addEventListener('click', () => {
+            showInitialPinScreen();
+        });
+    }
 }
 
 /**
@@ -1778,6 +1786,12 @@ const PIN_STORAGE_KEY = 'llamashift_pin';
 const PIN_SESSION_KEY = 'llamashift_pin_session'; // Timestamp of last successful verification
 const PIN_SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
+// DOM Elements for PIN screens
+const pinOverlay = document.getElementById('pin-security-overlay');
+const createDisplay = Array.from(document.querySelectorAll('#pin-create-display .pin-digit'));
+const confirmDisplay = Array.from(document.querySelectorAll('#pin-confirm-display .pin-digit'));
+const verifyDisplay = Array.from(document.querySelectorAll('#pin-verify-display .pin-digit'));
+
 const PinSecurity = {
     currentPin: '',
     confirmedPin: '',
@@ -2279,7 +2293,7 @@ function hidePinOverlay() {
  */
 function initPinSecurity() {
     setupKeypadListeners();
-    PinSecurity.checkPinSecurity();
+    showInitialPinScreen(); // Ensure the PIN screen is shown if needed
 }
 
 // ==============================
