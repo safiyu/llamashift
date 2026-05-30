@@ -1,4 +1,3 @@
-
 // Default runtime parameters
 const DEFAULT_PARAMS = {
     ctxSize: 16384,
@@ -248,6 +247,43 @@ function openModal(modalId) {
 }
 
 /**
+ * Show a custom confirmation modal
+ */
+function showConfirmModal(message, onConfirm, onCancel) {
+    let modal = document.getElementById('confirm-modal-overlay');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'confirm-modal-overlay';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="config-modal" style="max-width: 400px;">
+                <div class="config-modal-body">
+                    <p id="confirm-modal-message" style="margin-bottom: 20px; font-size: 1rem; color: var(--text-primary);"></p>
+                    <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                        <button id="confirm-modal-cancel" class="btn btn-secondary">Cancel</button>
+                        <button id="confirm-modal-confirm" class="btn btn-start">Confirm</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        
+        document.getElementById('confirm-modal-cancel').addEventListener('click', () => {
+            closeModal('confirm-modal-overlay');
+            if (modal._onCancel) modal._onCancel();
+        });
+        document.getElementById('confirm-modal-confirm').addEventListener('click', () => {
+            closeModal('confirm-modal-overlay');
+            if (modal._onConfirm) modal._onConfirm();
+        });
+    }
+    modal._onConfirm = onConfirm;
+    modal._onCancel = onCancel;
+    document.getElementById('confirm-modal-message').textContent = message;
+    openModal('confirm-modal-overlay');
+}
+
+/**
  * Handle creating a new model
  */
 async function handleCreateModel() {
@@ -416,42 +452,42 @@ async function waitForServerToBeReady(maxWaitMs = 60000, pollIntervalMs = 1000) 
  * Handle starting all models
  */
 async function handleStartAll() {
-    if (!confirm('Start all stopped models?')) return;
+    showConfirmModal('Start all stopped models?', async () => {
+        try {
+            const response = await fetch('/api/start_all', { method: 'POST' });
+            const result = await response.json();
 
-    try {
-        const response = await fetch('/api/start_all', { method: 'POST' });
-        const result = await response.json();
-
-        if (result.success) {
-            showToast('All models starting...', 'success');
-            await fetchSystemState(true);
-        } else {
-            showToast(result.message || 'Failed to start all models', 'error');
+            if (result.success) {
+                showToast('All models starting...', 'success');
+                await fetchSystemState(true);
+            } else {
+                showToast(result.message || 'Failed to start all models', 'error');
+            }
+        } catch (error) {
+            showToast('Error starting models: ' + error.message, 'error');
         }
-    } catch (error) {
-        showToast('Error starting models: ' + error.message, 'error');
-    }
+    });
 }
 
 /**
  * Handle stopping all models
  */
 async function handleStopAll() {
-    if (!confirm('Stop all running models?')) return;
+    showConfirmModal('Stop all running models?', async () => {
+        try {
+            const response = await fetch('/api/stop_all', { method: 'POST' });
+            const result = await response.json();
 
-    try {
-        const response = await fetch('/api/stop_all', { method: 'POST' });
-        const result = await response.json();
-
-        if (result.success) {
-            showToast('All models stopping...', 'success');
-            await fetchSystemState(true);
-        } else {
-            showToast(result.message || 'Failed to stop all models', 'error');
+            if (result.success) {
+                showToast('All models stopping...', 'success');
+                await fetchSystemState(true);
+            } else {
+                showToast(result.message || 'Failed to stop all models', 'error');
+            }
+        } catch (error) {
+            showToast('Error stopping models: ' + error.message, 'error');
         }
-    } catch (error) {
-        showToast('Error stopping models: ' + error.message, 'error');
-    }
+    });
 }
 
 /**
@@ -2396,4 +2432,3 @@ if (resetPinOverlay) {
         }
     });
 }
-
