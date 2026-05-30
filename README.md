@@ -511,6 +511,53 @@ taskkill /PID <PID> /F
 
 ---
 
+## Security Features
+
+| Feature | Description |
+|---------|-------------|
+| **PIN Security System** | 6-digit PIN required on first login, session-based validity (24 hours) |
+| **Reset PIN** | Admin-only PIN reset via web UI or CLI |
+| **Security Logging** | All PIN operations logged with timestamps and IP addresses |
+
+### PIN Security
+
+LlamaShift includes a built-in PIN security system to protect access to the web interface:
+
+- **6-digit PIN**: Create a memorable 6-digit PIN on first login
+- **Session-based validity**: PIN is cached for 24 hours for convenience
+- **Server-side hashing**: PINs are securely hashed with salt
+- **Security logging**: All PIN operations (creation, verification, reset) are logged
+
+### Resetting Your PIN
+
+If you forget your PIN or need to reset it, you have two options:
+
+#### Option 1: Web UI (Admin Access Required)
+
+1. Click the **Reset PIN** button (rotate icon) in the header
+2. Enter a new 6-digit PIN and confirm
+3. Click "Reset PIN"
+4. You'll be prompted to log in with your new PIN
+
+#### Option 2: Command Line Interface
+
+```bash
+# Linux/macOS
+python main.py reset-pin <new_pin>
+
+# Windows
+python main.py reset-pin <new_pin>
+```
+
+Example:
+```bash
+python main.py reset-pin 123456
+```
+
+> **Note**: The CLI method requires direct server access. The web UI method requires admin privileges.
+
+---
+
 ## Security Notes
 
 | Concern | Details | Mitigation |

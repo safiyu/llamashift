@@ -1,688 +1,572 @@
-#!/usr/bin/env python3
-"""
-MCP (Model Context Protocol) Server for LLM Model Management
+from __future__ import annotations
 
-This server implements the Model Context Protocol (JSON-RPC 2.0 based) to allow
-AI agents to discover, start, stop, and manage LLM models via standardized tools.
-
-Integration: Communicates with the main llama-switcher server.py REST API
-to perform actual model operations.
-"""
-
+import asyncio
 import json
-import os
-import sys
-import uuid
-import time
-import urllib.request
-import urllib.error
-import urllib.parse
-from urllib.parse import urlparse, parse_qs
-from socketserver import ThreadingMixIn
 import logging
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import os
+import signal
+import sys
+import urllib.error
+import urllib.request
+from typing import Any
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [MCP] %(levelname)s: %(message)s'
+import httpx
+
+from mcp.server.fastmcp import FastMCP
+
+# =============================================================================
+# Logging
+# =============================================================================
+
+# Use a dedicated logger namespace to avoid polluting the main app's logging
+logger = logging.getLogger("llama-shift.mcp")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s [MCP] %(levelname)s: %(message)s"))
+    logger.addHandler(handler)
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+MAIN_SERVER_URL: str = os.environ.get("MAIN_SERVER_URL", "http://localhost:8002")
+MCP_AUTH_TOKEN: str = os.environ.get("MCP_AUTH_TOKEN", "")
+API_TIMEOUT: int = int(os.environ.get("MCP_API_TIMEOUT", "30"))
+MCP_PORT: int = int(os.environ.get("MCP_PORT", "28002"))
+MCP_HOST: str = os.environ.get("MCP_HOST", "")
+
+# Reusable httpx async client (lazy-initialized)
+_http_client: httpx.AsyncClient | None = None
+
+
+
+# =============================================================================
+# MCP Server Instance
+# =============================================================================
+
+# Create the FastMCP server with standard metadata
+mcp = FastMCP(
+    name="llama-switcher-mcp",
+    version="1.0.0",
+    instructions="Manage LLM models via llama-shift. Use list_models to discover available models before starting or stopping them.",
 )
-logger = logging.getLogger(__name__)
-
-# Main server API base URL (where server.py is running)
-MAIN_SERVER_URL = os.environ.get("MAIN_SERVER_URL", "http://localhost:8002")
-
-# Global registry of active SSE sessions (sessionId -> wfile)
-sse_sessions = {}
-sse_sessions_lock = threading.Lock()
 
 
-class MCPProtocolError(Exception):
-    """Base exception for MCP protocol errors."""
-    def __init__(self, code, message, data=None):
-        self.code = code
+# =============================================================================
+# HTTP Helper: Async HTTP client using httpx
+# =============================================================================
+
+class MCPError(Exception):
+    """Error raised when the main server returns an error or is unreachable."""
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
         self.message = message
-        self.data = data
+        self.status = status
         super().__init__(message)
 
 
-# =============================================================================
-# MCP Tools Definition
-# =============================================================================
-
-MCP_TOOLS = [
-    {
-        "name": "list_models",
-        "description": "List all available LLM models with their configurations and current status",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "get_model_status",
-        "description": "Get the current status of all models (running/stopped) with resource usage",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "start_model",
-        "description": "Start an LLM model. In single-port mode, stops any currently running model first. "
-                      "In multi-port mode, can run multiple models simultaneously.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "model_id": {
-                    "type": "string",
-                    "description": "The model identifier (e.g., 'qwen3-32b', 'gemma4-31b', 'qwen3-8b')"
-                }
-            },
-            "required": ["model_id"]
-        }
-    },
-    {
-        "name": "stop_model",
-        "description": "Stop a running LLM model. In single-port mode, stops whatever model is currently running.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "model_id": {
-                    "type": "string",
-                    "description": "The model identifier to stop"
-                }
-            },
-            "required": ["model_id"]
-        }
-    },
-    {
-        "name": "stop_all_models",
-        "description": "Stop all running LLM models immediately",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "get_model_logs",
-        "description": "Retrieve the last N lines of logs from a running model",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "model_id": {
-                    "type": "string",
-                    "description": "The model identifier"
-                },
-                "lines": {
-                    "type": "integer",
-                    "description": "Number of log lines to retrieve (default: 100)",
-                    "default": 100
-                }
-            },
-            "required": ["model_id"]
-        }
-    },
-    {
-        "name": "get_gpu_info",
-        "description": "Get GPU telemetry information including temperature, utilization, memory usage, and power draw",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "get_system_stats",
-        "description": "Get system resource statistics including CPU load and memory usage",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "get_mode",
-        "description": "Get the current deployment mode (single_port or multi_port)",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "set_mode",
-        "description": "Change the deployment mode. single_port runs one model at a time on port 9000. "
-                      "multi_port allows multiple models on different ports simultaneously. "
-                      "Recommended to stop all models before switching modes.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "mode": {
-                    "type": "string",
-                    "enum": ["single_port", "multi_port"],
-                    "description": "The deployment mode to switch to"
-                }
-            },
-            "required": ["mode"]
-        }
-    }
-]
+def _build_headers() -> dict[str, str]:
+    """Build headers for API requests, including auth token if configured."""
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if MCP_AUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {MCP_AUTH_TOKEN}"
+    return headers
 
 
-# =============================================================================
-# MCP Protocol Handler
-# =============================================================================
-
-class MCPHandler(BaseHTTPRequestHandler):
-    """Handles MCP JSON-RPC 2.0 protocol requests."""
-    
-    # Class-level reference to server for shutdown signaling
-    server_instance = None
-    
-    def version_string(self):
-        return "llama-switcher-MCP/1.0"
-    
-    def log_message(self, format, *args):
-        logger.info(format % args)
-    
-    # ---- HTTP Method Handlers ----
-    
-    def do_GET(self):
-        """Handle GET requests - serve SSE (Server-Sent Events) endpoint."""
-        parsed = urlparse(self.path)
-        
-        if parsed.path in ('/sse', '/'):
-            self._handle_sse()
-        elif parsed.path == '/info':
-            self._send_json(200, {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": {"listChanged": False},
-                    "resources": {"subscribe": False}
-                },
-                "server": {
-                    "name": "llama-switcher-mcp",
-                    "version": "1.0.0"
-                }
-            })
-        else:
-            self._send_json(404, {"error": "Not found"})
-    
-    def do_POST(self):
-        """Handle POST requests - JSON-RPC 2.0 endpoint."""
-        parsed_path = urlparse(self.path)
-        
-        if parsed_path.path in ('/message', '/'):
-            self._handle_json_rpc()
-        else:
-            self._send_json(404, {"error": "Not found"})
-    
-    # ---- SSE (Server-Sent Events) Support ----
-    
-    def _handle_sse(self):
-        """Serve SSE endpoint for MCP clients."""
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/event-stream')
-        self.send_header('Cache-Control', 'no-cache')
-        self.send_header('Connection', 'keep-alive')
-        self.end_headers()
-        
-        # Generate a unique session ID for this SSE stream connection
-        session_id = str(uuid.uuid4())
-        logger.info(f"Establishing SSE connection with session ID: {session_id}")
-        
-        # Send initial endpoint event to the client specifying the POST endpoint
-        endpoint_event = f"event: endpoint\ndata: /message?sessionId={session_id}\n\n"
-        self.wfile.write(endpoint_event.encode('utf-8'))
-        self.wfile.flush()
-        
-        # Register the wfile globally so POST handlers can push events back to this client
-        with sse_sessions_lock:
-            sse_sessions[session_id] = self.wfile
-        
-        # Keep connection alive
-        try:
-            while True:
-                time.sleep(30)
-                self.wfile.write(b": heartbeat\n\n")
-                self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            pass
-        finally:
-            with sse_sessions_lock:
-                sse_sessions.pop(session_id, None)
-            logger.info(f"SSE session {session_id} disconnected")
-    
-    # ---- JSON-RPC 2.0 Handler ----
-    
-    def _handle_json_rpc(self):
-        """Process a JSON-RPC 2.0 request."""
-        try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length)
-            request = json.loads(body.decode('utf-8'))
-        except (json.JSONDecodeError, ValueError) as e:
-            self._send_mcp_response(self._error_response(-32700, "Parse error", str(e)))
-            return
-        
-        # Validate request structure
-        if not isinstance(request, dict) or request.get('jsonrpc') != '2.0':
-            self._send_mcp_response(self._error_response(-32600, "Invalid Request"))
-            return
-        
-        method = request.get('method')
-        request_id = request.get('id')
-        params = request.get('params', {})
-        
-        # Route to appropriate handler
-        handlers = {
-            'initialize': lambda p: self._handle_initialize(request_id),
-            'notifications/initialized': self._handle_initialized,
-            'tools/list': lambda p: self._handle_tools_list(request_id),
-            'tools/call': lambda p: self._handle_tools_call(p, request_id),
-            'resources/list': lambda p: self._handle_resources_list(request_id),
-            'ping': lambda p: self._handle_ping(request_id),
-        }
-        
-        handler = handlers.get(method)
-        if handler:
-            try:
-                response = handler(params)
-                if response is not None:
-                    self._send_mcp_response(response)
-                else:
-                    # If it's a notification, respond immediately to the POST
-                    self.send_response(202)
-                    self.send_header('Content-Length', '0')
-                    self.end_headers()
-            except MCPProtocolError as e:
-                self._send_mcp_response(self._error_response(e.code, e.message, e.data))
-            except Exception as e:
-                logger.error(f"Error handling {method}: {e}", exc_info=True)
-                self._send_mcp_response(self._error_response(-32603, "Internal error", str(e)))
-        else:
-            self._send_mcp_response(self._error_response(-32601, "Method not found", method))
-    
-    # ---- JSON-RPC Response Helpers ----
-    
-    def _send_mcp_response(self, response):
-        """Send JSON-RPC response either via active SSE connection or HTTP response fallback."""
-        parsed_path = urlparse(self.path)
-        query_params = parse_qs(parsed_path.query)
-        
-        session_id = None
-        if 'sessionId' in query_params:
-            session_id = query_params['sessionId'][0]
-        elif 'session_id' in query_params:
-            session_id = query_params['session_id'][0]
-            
-        target_wfile = None
-        with sse_sessions_lock:
-            if session_id and session_id in sse_sessions:
-                target_wfile = sse_sessions[session_id]
-            elif sse_sessions:
-                # Fallback to the latest active session
-                target_wfile = list(sse_sessions.values())[-1]
-                
-        if target_wfile:
-            # 1. Immediately respond to the POST request with HTTP 202 Accepted
-            self.send_response(202)
-            self.send_header('Content-Length', '0')
-            self.end_headers()
-            
-            # 2. Send the JSON-RPC response as a message event over the SSE stream
-            try:
-                response_msg = f"event: message\ndata: {json.dumps(response)}\n\n"
-                target_wfile.write(response_msg.encode('utf-8'))
-                target_wfile.flush()
-            except Exception as e:
-                logger.error(f"Failed to send JSON-RPC response over SSE: {e}")
-        else:
-            # Legacy fallback: Send directly in HTTP POST response body
-            self._send_json_response_legacy(response)
-            
-    def _send_json_response_legacy(self, response):
-        """Send a JSON-RPC response directly in HTTP response body (legacy mode)."""
-        data = json.dumps(response).encode('utf-8')
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-    
-    def _send_json(self, code, data):
-        """Send a plain JSON response."""
-        body = json.dumps(data).encode('utf-8')
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    
-    @staticmethod
-    def _response(request_id, result):
-        return {"jsonrpc": "2.0", "result": result, "id": request_id}
-    
-    @staticmethod
-    def _error_response(code, message, data=None):
-        error = {"code": code, "message": message}
-        if data:
-            error["data"] = data
-        return {"jsonrpc": "2.0", "error": error, "id": None}
-    
-    # ---- JSON-RPC Method Handlers ----
-    
-    def _handle_initialize(self, request_id):
-        """Handle the initialize request (first call from MCP client)."""
-        return self._response(
-            request_id,
-            {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": {"listChanged": False},
-                    "resources": {"listChanged": False}
-                },
-                "server": {
-                    "name": "llama-switcher-mcp",
-                    "version": "1.0.0",
-                    "description": "Manage LLM models via llama-switcher"
-                }
-            }
+async def _get_client() -> httpx.AsyncClient:
+    """Return the shared async HTTP client, creating it if needed."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            base_url=MAIN_SERVER_URL,
+            headers=_build_headers(),
+            timeout=httpx.Timeout(API_TIMEOUT),
         )
-    
-    def _handle_initialized(self, params):
-        """Handle the initialized notification (no response needed)."""
-        logger.info("MCP client initialized")
-        return None
-    
-    def _handle_tools_list(self, request_id):
-        """Return the list of available tools."""
-        return self._response(
-            request_id,
-            {"tools": MCP_TOOLS}
-        )
-    
-    def _handle_tools_call(self, params, request_id):
-        """Execute a tool call."""
-        if not isinstance(params, dict):
-            raise MCPProtocolError(-32602, "Invalid params")
-        
-        tool_name = params.get('name')
-        arguments = params.get('arguments', {})
-        
-        if not tool_name:
-            raise MCPProtocolError(-32602, "Missing tool name")
-        
-        # Dispatch to tool handler
-        handlers = {
-            'list_models': self._tool_list_models,
-            'get_model_status': self._tool_get_model_status,
-            'start_model': self._tool_start_model,
-            'stop_model': self._tool_stop_model,
-            'stop_all_models': self._tool_stop_all_models,
-            'get_model_logs': self._tool_get_model_logs,
-            'get_gpu_info': self._tool_get_gpu_info,
-            'get_system_stats': self._tool_get_system_stats,
-            'get_mode': self._tool_get_mode,
-            'set_mode': self._tool_set_mode,
-        }
-        
-        handler = handlers.get(tool_name)
-        if not handler:
-            raise MCPProtocolError(-32601, f"Tool not found: {tool_name}")
-        
-        result = handler(arguments)
-        return self._response(request_id, result)
-    
-    def _handle_resources_list(self, request_id):
-        """Return available resources (currently none)."""
-        return self._response(request_id, {"resources": []})
-    
-    def _handle_ping(self, request_id):
-        """Handle a ping request (health check)."""
-        return self._response(request_id, {})
-    
-    # ---- Tool Implementations ----
-    
-    def _call_api(self, method, path, data=None):
-        """Make an API call to the main server."""
-        url = f"{MAIN_SERVER_URL}{path}"
-        try:
-            if data is not None:
-                body = json.dumps(data).encode('utf-8')
-                req = urllib.request.Request(url, data=body, method=method)
-                req.add_header('Content-Type', 'application/json')
-            else:
-                req = urllib.request.Request(url, method=method)
-            
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
+    return _http_client
+
+
+async def _call_api(method: str, path: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Make an async HTTP call to the main server REST API.
+
+    Raises MCPError on HTTP errors or connection failures.
+    """
+    client = await _get_client()
+
+    try:
+        response = await client.request(method, path, json=data)
+
+        # Handle HTTP errors
+        if response.status_code >= 400:
             try:
-                error_body = json.loads(e.read().decode('utf-8'))
-            except:
+                error_body = response.json()
+            except Exception:
                 error_body = {}
-            raise MCPProtocolError(-32000, error_body.get("error", "API error"), {"status": e.code})
-        except urllib.error.URLError as e:
-            raise MCPProtocolError(-32000, f"Cannot connect to main server: {e.reason}")
-        except Exception as e:
-            raise MCPProtocolError(-32000, str(e))
-    
-    def _tool_list_models(self, args):
-        """List all available models from config."""
-        try:
-            data = self._call_api("GET", "/api/config")
-            models = data.get("models", {})
-            result = []
-            for model_id, config in models.items():
-                result.append({
-                    "id": model_id,
-                    "name": config.get("name", model_id),
-                    "filename": config.get("filename"),
-                    "port": config.get("port"),
-                    "devices": config.get("devices", []),
-                    "ctxSize": config.get("ctxSize"),
-                })
-            return {"models": result, "count": len(result)}
-        except MCPProtocolError as e:
-            return {"error": str(e), "models": []}
-    
-    def _tool_get_model_status(self, args):
-        """Get current status of all models."""
-        try:
-            data = self._call_api("GET", "/api/status")
-            return {
-                "mode": data.get("mode"),
-                "models": data.get("models", []),
-                "host": data.get("host"),
-                "mcp": data.get("mcp")
-            }
-        except MCPProtocolError as e:
-            return {"error": str(e)}
-    
-    def _tool_start_model(self, args):
-        """Start a model."""
-        model_id = args.get("model_id")
-        if not model_id:
-            raise MCPProtocolError(-32602, "Missing required parameter: model_id")
-        
-        try:
-            data = self._call_api("POST", "/api/start", {"model": model_id})
-            return {
-                "success": data.get("success"),
-                "message": data.get("message"),
-                "stopped": data.get("stopped", [])
-            }
-        except MCPProtocolError as e:
-            return {"error": str(e)}
-    
-    def _tool_stop_model(self, args):
-        """Stop a model."""
-        model_id = args.get("model_id")
-        if not model_id:
-            raise MCPProtocolError(-32602, "Missing required parameter: model_id")
-        
-        try:
-            data = self._call_api("POST", "/api/stop", {"model": model_id})
-            return {
-                "success": data.get("success"),
-                "message": data.get("message")
-            }
-        except MCPProtocolError as e:
-            return {"error": str(e)}
-    
-    def _tool_stop_all_models(self, args):
-        """Stop all running models."""
-        try:
-            data = self._call_api("POST", "/api/stop_all")
-            return {
-                "success": data.get("success"),
-                "message": data.get("message"),
-                "stopped_count": len(data.get("stopped_pids", []))
-            }
-        except MCPProtocolError as e:
-            return {"error": str(e)}
-    
-    def _tool_get_model_logs(self, args):
-        """Get model logs."""
-        model_id = args.get("model_id")
-        if not model_id:
-            raise MCPProtocolError(-32602, "Missing required parameter: model_id")
-        
-        lines = args.get("lines", 100)
-        
-        try:
-            data = self._call_api("GET", f"/api/logs?model={model_id}&lines={lines}")
-            return {
-                "model": data.get("model"),
-                "logs": data.get("logs", "")
-            }
-        except MCPProtocolError as e:
-            return {"error": str(e)}
-    
-    def _tool_get_gpu_info(self, args):
-        """Get GPU telemetry information."""
-        try:
-            data = self._call_api("GET", "/api/gpu")
-            return data
-        except MCPProtocolError as e:
-            return {"error": str(e)}
-    
-    def _tool_get_system_stats(self, args):
-        """Get system resource statistics."""
-        try:
-            data = self._call_api("GET", "/api/status")
-            return {"host": data.get("host")}
-        except MCPProtocolError as e:
-            return {"error": str(e)}
-    
-    def _tool_get_mode(self, args):
-        """Get current deployment mode."""
-        try:
-            data = self._call_api("GET", "/api/config")
-            return {"mode": data.get("mode"), "modes": data.get("modes", [])}
-        except MCPProtocolError as e:
-            return {"error": str(e)}
-    
-    def _tool_set_mode(self, args):
-        """Set deployment mode."""
-        mode = args.get("mode")
-        if mode not in ("single_port", "multi_port"):
-            raise MCPProtocolError(-32602, "Invalid mode. Must be 'single_port' or 'multi_port'")
-        
-        try:
-            data = self._call_api("POST", "/api/config", {"mode": mode})
-            return {
-                "success": data.get("success"),
-                "mode": data.get("mode"),
-                "message": data.get("message"),
-                "warning": data.get("warning")
-            }
-        except MCPProtocolError as e:
-            return {"error": str(e)}
+
+            if response.status_code in (401, 403):
+                raise MCPError(
+                    "Authentication failed. Check MCP_AUTH_TOKEN configuration.",
+                    status=response.status_code,
+                )
+            if response.status_code == 503:
+                raise MCPError(
+                    "Main server is restarting, please try again.",
+                    status=response.status_code,
+                )
+            raise MCPError(
+                error_body.get("error", f"API error (HTTP {response.status_code})"),
+                status=response.status_code,
+            )
+
+        return response.json()
+
+    except httpx.TimeoutException:
+        raise MCPError(
+            f"Connection to main server timed out after {API_TIMEOUT}s",
+            status=None,
+        )
+    except httpx.ConnectError as e:
+        raise MCPError(f"Cannot connect to main server at {MAIN_SERVER_URL}: {e}")
+    except MCPError:
+        raise
+    except Exception as e:
+        raise MCPError(f"Unexpected error: {e}")
+
+
+async def _close_client() -> None:
+    """Gracefully close the shared HTTP client."""
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+
 
 
 # =============================================================================
-# Server Lifecycle
+# Safe call wrapper — catches MCPError so tools return structured results
 # =============================================================================
 
-class GracefulHTTPServer(ThreadingMixIn, HTTPServer):
-    """HTTP server that handles graceful shutdown and concurrent requests."""
-    daemon_threads = True
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._shutdown_event = threading.Event()
-    
-    def signal_handler(self, signum, frame):
-        logger.info(f"Received signal {signum}, shutting down MCP server...")
-        self._shutdown_event.set()
-    
-    def shutdown(self):
-        logger.info("Initiating MCP server shutdown...")
-        self._shutdown_event.set()
-        threading.Thread(target=self.shutdown_thread, daemon=True).start()
-    
-    def shutdown_thread(self):
-        """Shutdown in a separate thread to avoid blocking."""
-        self.shutdown()
-        self.server_close()
-    
-    def serve_forever(self, poll_interval=0.5):
-        """Serve requests until shutdown is called."""
-        import signal
-        signal.signal(signal.SIGINT, self.signal_handler)
-        signal.signal(signal.SIGTERM, self.signal_handler)
-        
-        try:
-            while not self._shutdown_event.is_set():
-                self.handle_request()
-        finally:
-            self.server_close()
+def _safe_call(operation: str, fn: Any, default: dict) -> dict:
+    """Call *fn* (blocking) and catch MCPError, returning a friendly error dict.
+
+    For sync wrappers around async operations we run inside asyncio.run.
+    In FastMCP the tool handlers are already awaited, so _call_api can be
+    called directly — this wrapper is kept for compatibility.
+    """
+    try:
+        return fn()
+    except MCPError as e:
+        logger.error("%s failed (HTTP %s): %s", operation, e.status, e, exc_info=True)
+        return {"error": str(e), "error_type": "MCPError", "http_status": e.status}
+    except Exception as e:
+        logger.error("%s failed: %s", operation, e, exc_info=True)
+        return {"error": str(e), "error_type": type(e).__name__}
 
 
-def run_mcp_server(port=28002):
-    """Run the MCP server."""
-    server_address = ('', port)
-    httpd = GracefulHTTPServer(server_address, MCPHandler)
-    logger.info(f"MCP Server starting on port {port}")
-    logger.info(f"Connecting to main server at {MAIN_SERVER_URL}")
-    
-    # Verify main server is reachable
+async def _safe_call_async(operation: str, coro: Any, default: dict) -> dict:
+    """Await a coroutine and catch MCPError, returning a friendly error dict.
+
+    *coro* should be a coroutine object (not an already-resolved result).
+    If the coroutine raises, we return *default* augmented with error info.
+    """
+    try:
+        return await coro  # type: ignore[return-value]
+    except MCPError as e:
+        logger.error("%s failed (HTTP %s): %s", operation, e.status, e, exc_info=True)
+        return {"error": str(e), "error_type": "MCPError", "http_status": e.status}
+    except Exception as e:
+        logger.error("%s failed: %s", operation, e, exc_info=True)
+        return {"error": str(e), "error_type": type(e).__name__}
+
+
+
+# =============================================================================
+# Async helper functions (used by resources and tools)
+# =============================================================================
+
+async def _do_list_models() -> dict[str, Any]:
+    """Fetch the list of available models from the main server."""
+    return await _call_api("GET", "/api/models")
+
+
+async def _do_get_model_status() -> dict[str, Any]:
+    """Fetch the current status of all models from the main server."""
+    return await _call_api("GET", "/api/status")
+
+
+async def _do_get_gpu_info() -> dict[str, Any]:
+    """Fetch GPU telemetry from the main server."""
+    return await _call_api("GET", "/api/gpu")
+
+
+async def _do_get_system_stats() -> dict[str, Any]:
+    """Fetch system stats from the main server."""
+    data = await _call_api("GET", "/api/status")
+    return {"host": data.get("host")}
+
+
+async def _do_get_mode() -> dict[str, Any]:
+    """Fetch deployment mode from the main server."""
+    data = await _call_api("GET", "/api/config")
+    return {"mode": data.get("mode"), "modes": data.get("modes", [])}
+
+
+async def _do_start_model(model_id: str) -> dict[str, Any]:
+    data = await _call_api("POST", "/api/start", {"model": model_id})
+    return {
+        "success": data.get("success"),
+        "message": data.get("message"),
+        "stopped": data.get("stopped", []),
+    }
+
+
+async def _do_stop_model(model_id: str) -> dict[str, Any]:
+    data = await _call_api("POST", "/api/stop", {"model": model_id})
+    return {
+        "success": data.get("success"),
+        "message": data.get("message"),
+    }
+
+
+async def _do_stop_all_models() -> dict[str, Any]:
+    data = await _call_api("POST", "/api/stop_all")
+    return {
+        "success": data.get("success"),
+        "message": data.get("message"),
+        "stopped_count": len(data.get("stopped_pids", [])),
+    }
+
+
+async def _do_get_model_logs(model_id: str, lines: int) -> dict[str, Any]:
+    data = await _call_api("GET", f"/api/logs?model={model_id}&lines={lines}")
+    return {
+        "model": data.get("model"),
+        "logs": data.get("logs", ""),
+    }
+
+
+async def _do_set_mode(mode: str) -> dict[str, Any]:
+    data = await _call_api("POST", "/api/config", {"mode": mode})
+    return {
+        "success": data.get("success"),
+        "mode": data.get("mode"),
+        "message": data.get("message"),
+        "warning": data.get("warning"),
+    }
+
+
+# =============================================================================
+# Resources (synchronous — read-only, call sync wrappers)
+# =============================================================================
+
+def _sync_models_list() -> dict[str, Any]:
+    """Sync wrapper for list_models (for resource decorators)."""
+    try:
+        return asyncio.run(_do_list_models())
+    except MCPError as e:
+        return {"error": str(e), "error_type": "MCPError"}
+
+
+def _sync_model_status() -> dict[str, Any]:
+    """Sync wrapper for get_model_status."""
+    try:
+        return asyncio.run(_do_get_model_status())
+    except MCPError as e:
+        return {"error": str(e), "error_type": "MCPError"}
+
+
+def _sync_health_check() -> dict[str, Any]:
+    """Sync health check for resource."""
     try:
         req = urllib.request.Request(f"{MAIN_SERVER_URL}/api/status")
         with urllib.request.urlopen(req, timeout=5) as resp:
-            status = json.loads(resp.read().decode('utf-8'))
-            logger.info(f"Main server is running (mode: {status.get('mode')})")
+            status = json.loads(resp.read().decode("utf-8"))
+        return {
+            "status": "ok",
+            "main_server": MAIN_SERVER_URL,
+            "mode": status.get("mode"),
+            "auth_configured": bool(MCP_AUTH_TOKEN),
+        }
     except Exception as e:
-        logger.warning(f"Could not connect to main server at {MAIN_SERVER_URL}: {e}")
-        logger.warning("MCP server will retry connections on each API call")
-    
+        return {
+            "status": "degraded",
+            "main_server": MAIN_SERVER_URL,
+            "error": str(e),
+        }
+
+
+def _sync_gpu_info() -> dict[str, Any]:
     try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        logger.info("MCP Server shutting down...")
-    finally:
-        httpd.server_close()
-        logger.info("MCP Server stopped")
+        return asyncio.run(_do_get_gpu_info())
+    except MCPError as e:
+        return {"error": str(e), "error_type": "MCPError"}
+
+
+def _sync_system_stats() -> dict[str, Any]:
+    try:
+        return asyncio.run(_do_get_system_stats())
+    except MCPError as e:
+        return {"error": str(e), "error_type": "MCPError"}
+
+
+def _sync_mode() -> dict[str, Any]:
+    try:
+        return asyncio.run(_do_get_mode())
+    except MCPError as e:
+        return {"error": str(e), "error_type": "MCPError"}
+
+
+@mcp.resource("config://models")
+def resource_models() -> str:
+    """Real-time listing of all available LLM models with their configurations."""
+    return json.dumps(_sync_models_list(), indent=2)
+
+
+@mcp.resource("status://models")
+def resource_model_status() -> str:
+    """Current running/stopped status of all models with resource usage."""
+    return json.dumps(_sync_model_status(), indent=2)
+
+
+@mcp.resource("health://server")
+def resource_health() -> str:
+    """Health status of the MCP server and connection to the main server."""
+    return json.dumps(_sync_health_check(), indent=2)
+
+
+@mcp.resource("gpu://info")
+def resource_gpu_info() -> str:
+    """GPU telemetry: temperature, utilization, memory, power."""
+    return json.dumps(_sync_gpu_info(), indent=2)
+
+
+@mcp.resource("system://stats")
+def resource_system_stats() -> str:
+    """System resource statistics including CPU load and memory usage."""
+    return json.dumps(_sync_system_stats(), indent=2)
+
+
+@mcp.resource("config://mode")
+def resource_mode() -> str:
+    """Current deployment mode (single_port or multi_port)."""
+    return json.dumps(_sync_mode(), indent=2)
+
+
+
+# =============================================================================
+# Tools (async — proper FastMCP async handlers)
+# =============================================================================
+
+
+def _validate_model_id(model_id: str) -> dict[str, Any] | None:
+    """Validate model_id parameter. Returns error dict or None."""
+    if not model_id or not isinstance(model_id, str) or not model_id.strip():
+        return {"error": "model_id must be a non-empty string"}
+    return None
+
+
+@mcp.tool()
+async def list_models() -> dict[str, Any]:
+    """List all available LLM models with their configurations and current status.
+
+    Returns model IDs, names, filenames, ports, devices, and context sizes.
+    Run this first to discover available model IDs before using other tools.
+    """
+    return await _safe_call_async(
+        "list_models",
+        _do_list_models(),
+        {"models": [], "count": 0},
+    )
+
+
+@mcp.tool()
+async def get_model_status() -> dict[str, Any]:
+    """Get the current status of all models (running/stopped) with resource usage."""
+    return await _safe_call_async(
+        "get_model_status",
+        _do_get_model_status(),
+        {},
+    )
+
+
+@mcp.tool()
+async def start_model(model_id: str) -> dict[str, Any]:
+    """Start an LLM model by its identifier.
+
+    In single-port mode, stops any currently running model first.
+    In multi-port mode, can run multiple models simultaneously.
+    """
+    err = _validate_model_id(model_id)
+    if err:
+        return err
+    return await _safe_call_async(
+        f"start_model({model_id})",
+        _do_start_model(model_id),
+        {},
+    )
+
+
+@mcp.tool()
+async def stop_model(model_id: str) -> dict[str, Any]:
+    """Stop a running LLM model by its identifier."""
+    err = _validate_model_id(model_id)
+    if err:
+        return err
+    return await _safe_call_async(
+        f"stop_model({model_id})",
+        _do_stop_model(model_id),
+        {},
+    )
+
+
+@mcp.tool()
+async def stop_all_models() -> dict[str, Any]:
+    """Stop all running LLM models immediately."""
+    return await _safe_call_async(
+        "stop_all_models",
+        _do_stop_all_models(),
+        {},
+    )
+
+
+@mcp.tool()
+async def get_model_logs(model_id: str, lines: int = 100) -> dict[str, Any]:
+    """Retrieve the last N lines of logs from a running model.
+
+    Args:
+        model_id: The model identifier
+        lines: Number of log lines to retrieve (default: 100, max: 5000)
+    """
+    err = _validate_model_id(model_id)
+    if err:
+        return err
+    clamped_lines = max(1, min(lines, 5000))
+    return await _safe_call_async(
+        f"get_model_logs({model_id})",
+        _do_get_model_logs(model_id, clamped_lines),
+        {},
+    )
+
+
+@mcp.tool()
+async def get_gpu_info() -> dict[str, Any]:
+    """Get GPU telemetry information including temperature, utilization,
+    memory usage, and power draw."""
+    return await _safe_call_async(
+        "get_gpu_info",
+        _do_get_gpu_info(),
+        {},
+    )
+
+
+@mcp.tool()
+async def get_system_stats() -> dict[str, Any]:
+    """Get system resource statistics including CPU load and memory usage."""
+    return await _safe_call_async(
+        "get_system_stats",
+        _do_get_system_stats(),
+        {},
+    )
+
+
+@mcp.tool()
+async def get_mode() -> dict[str, Any]:
+    """Get the current deployment mode (single_port or multi_port)."""
+    return await _safe_call_async(
+        "get_mode",
+        _do_get_mode(),
+        {},
+    )
+
+
+@mcp.tool()
+async def set_mode(mode: str) -> dict[str, Any]:
+    """Change the deployment mode.
+
+    Args:
+        mode: 'single_port' runs one model at a time on port 9000.
+              'multi_port' allows multiple models on different ports simultaneously.
+              Recommended to stop all models before switching modes.
+    """
+    if mode not in ("single_port", "multi_port"):
+        return {
+            "error": f"Invalid mode '{mode}'. Must be 'single_port' or 'multi_port'."
+        }
+    return await _safe_call_async(
+        f"set_mode({mode})",
+        _do_set_mode(mode),
+        {},
+    )
+
+
+@mcp.tool()
+async def health_check() -> dict[str, Any]:
+    """Check the health status of the MCP server and its connection to the main server."""
+    return _sync_health_check()
+
+
+
+# =============================================================================
+# Server Entry Point
+# =============================================================================
+
+def _signal_handler() -> None:
+    """Handle shutdown signals gracefully."""
+    logger.info("Shutdown signal received, closing resources...")
+    asyncio.run(_close_client())
+
+
+def run_mcp_server(port: int | None = None, host: str | None = None) -> None:
+    """Run the MCP server using the official mcp SDK.
+
+    Uses SSE transport so the server can be discovered by MCP clients
+    via the /sse endpoint and invoked via POST to /message.
+    """
+    port = port if port is not None else MCP_PORT
+    host = host if host is not None else MCP_HOST
+
+    # Log configuration at startup
+    logger.info("MCP Server configuration:")
+    logger.info("  - Main server: %s", MAIN_SERVER_URL)
+    logger.info("  - Auth token: %s", "configured" if MCP_AUTH_TOKEN else "not set (unauthenticated)")
+    logger.info("  - API timeout: %ds", API_TIMEOUT)
+    logger.info("  - Port: %d", port)
+
+    # Register signal handlers for graceful shutdown
+    try:
+        import signal as sig
+        for s in (sig.SIGINT, sig.SIGTERM):
+            sig.signal(s, lambda *_: asyncio.run(_close_client()))
+    except (OSError, ValueError):
+        # signal() only works in main thread; non-main threads skip gracefully
+        pass
+
+    # Verify main server is reachable at startup
+    try:
+        status = asyncio.run(_call_api("GET", "/api/status"))
+        logger.info("Main server is running (mode: %s)", status.get("mode"))
+    except MCPError as e:
+        logger.warning("Could not connect to main server at %s: %s", MAIN_SERVER_URL, e)
+        logger.warning("MCP server will retry connections on each API call")
+    except Exception as e:
+        logger.warning("Startup connectivity check failed: %s", e)
+
+    logger.info("MCP Server starting on http://%s:%d", host or "*", port)
+
+    # Use the SSE transport from the official SDK
+    mcp.run(transport="sse", host=host or None, port=port)
 
 
 if __name__ == "__main__":
-    port = 28002
+    port = MCP_PORT
     if len(sys.argv) > 1:
         try:
             port = int(sys.argv[1])
         except ValueError:
-            print(f"Invalid port number: {sys.argv[1]}. Using default 28002.")
-    
-    # Allow overriding main server URL via environment variable
+            print(f"Invalid port number: {sys.argv[1]}. Using default {MCP_PORT}.")
+
     if len(sys.argv) > 2:
         os.environ["MAIN_SERVER_URL"] = sys.argv[2]
-    
+
     run_mcp_server(port)
+

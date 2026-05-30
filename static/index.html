@@ -68,6 +68,9 @@
             <button id="btn-refresh" class="btn btn-secondary" title="Force refresh system state">
                 <i class="fa-solid fa-arrows-rotate"></i>
             </button>
+            <button id="btn-change-pin" class="btn btn-warning btn-glow" title="Change your security PIN">
+                <i class="fa-solid fa-key"></i>
+            </button>
         </div>
     </header>
 
@@ -530,7 +533,7 @@
         </div>
     </div>
 
-    <script src="index.js?v=4"></script>
+    <script src="index.js?v=6"></script>
 
     <!-- PIN Security Overlay -->
     <div id="pin-security-overlay" class="pin-security-overlay hidden">
@@ -636,6 +639,108 @@
                     <button class="pin-key action-btn" data-action="done" id="pin-verify-done-btn">LOGIN</button>
                 </div>
                 <p class="pin-error" id="pin-verify-error"></p>
+            </div>
+
+            <!-- Change PIN Section (Verify current → Enter new → Confirm new) -->
+            <div id="pin-change-section" class="change-pin-section">
+                <div class="security-lock-icon">
+                    <i class="fa-solid fa-key"></i>
+                </div>
+                <h2>Change Security PIN</h2>
+                <p>Verify your current PIN, then set a new one</p>
+                
+                <!-- Step indicator -->
+                <div class="change-pin-steps">
+                    <span class="step active" id="step-1">1. Verify</span>
+                    <span class="step" id="step-2">2. New PIN</span>
+                    <span class="step" id="step-3">3. Confirm</span>
+                </div>
+                
+                <!-- Step 1: Verify current PIN -->
+                <div id="change-verify-step" class="change-pin-step active">
+                    <div class="pin-display" id="pin-change-verify-display">
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                    </div>
+                    <div class="pin-keypad">
+                        <button class="pin-key" data-key="1">1</button>
+                        <button class="pin-key" data-key="2">2</button>
+                        <button class="pin-key" data-key="3">3</button>
+                        <button class="pin-key" data-key="4">4</button>
+                        <button class="pin-key" data-key="5">5</button>
+                        <button class="pin-key" data-key="6">6</button>
+                        <button class="pin-key" data-key="7">7</button>
+                        <button class="pin-key" data-key="8">8</button>
+                        <button class="pin-key" data-key="9">9</button>
+                        <button class="pin-key clear-btn" data-action="clear">CLR</button>
+                        <button class="pin-key" data-key="0">0</button>
+                        <button class="pin-key action-btn" data-action="change-verify">VERIFY</button>
+                    </div>
+                    <p class="pin-error" id="pin-change-verify-error"></p>
+                </div>
+                
+                <!-- Step 2: Enter new PIN -->
+                <div id="change-new-step" class="change-pin-step">
+                    <div class="pin-display" id="pin-change-new-display">
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                    </div>
+                    <div class="pin-keypad">
+                        <button class="pin-key" data-key="1">1</button>
+                        <button class="pin-key" data-key="2">2</button>
+                        <button class="pin-key" data-key="3">3</button>
+                        <button class="pin-key" data-key="4">4</button>
+                        <button class="pin-key" data-key="5">5</button>
+                        <button class="pin-key" data-key="6">6</button>
+                        <button class="pin-key" data-key="7">7</button>
+                        <button class="pin-key" data-key="8">8</button>
+                        <button class="pin-key" data-key="9">9</button>
+                        <button class="pin-key clear-btn" data-action="clear">CLR</button>
+                        <button class="pin-key" data-key="0">0</button>
+                        <button class="pin-key action-btn" data-action="change-new">NEXT</button>
+                    </div>
+                    <p class="pin-hint">Choose a new 6-digit PIN</p>
+                    <p class="pin-error" id="pin-change-new-error"></p>
+                </div>
+                
+                <!-- Step 3: Confirm new PIN -->
+                <div id="change-confirm-step" class="change-pin-step">
+                    <div class="pin-display" id="pin-change-confirm-display">
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                        <div class="pin-digit"></div>
+                    </div>
+                    <div class="pin-keypad">
+                        <button class="pin-key" data-key="1">1</button>
+                        <button class="pin-key" data-key="2">2</button>
+                        <button class="pin-key" data-key="3">3</button>
+                        <button class="pin-key" data-key="4">4</button>
+                        <button class="pin-key" data-key="5">5</button>
+                        <button class="pin-key" data-key="6">6</button>
+                        <button class="pin-key" data-key="7">7</button>
+                        <button class="pin-key" data-key="8">8</button>
+                        <button class="pin-key" data-key="9">9</button>
+                        <button class="pin-key clear-btn" data-action="clear">CLR</button>
+                        <button class="pin-key" data-key="0">0</button>
+                        <button class="pin-key action-btn" data-action="change-confirm">CONFIRM</button>
+                    </div>
+                    <p class="pin-hint">Re-enter your new 6-digit PIN</p>
+                    <p class="pin-error" id="pin-change-confirm-error"></p>
+                </div>
+                
+                <!-- Cancel button (always visible) -->
+                <button type="button" class="pin-cancel-btn" id="change-cancel-btn" onclick="handleCancelChangePin(); return false;">Cancel</button>
             </div>
         </div>
     </div>

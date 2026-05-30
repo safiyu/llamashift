@@ -136,6 +136,31 @@
     color: var(--rose-neon);
 }
 
+.pin-cancel-btn {
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 0.6rem 1.5rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: block;
+    margin: 0.8rem auto 1rem;
+}
+
+.pin-cancel-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: var(--glass-border-glow);
+    color: var(--text-primary);
+    transform: translateY(-1px);
+}
+
+.pin-cancel-btn:active {
+    transform: translateY(0);
+}
+
 /* Create PIN Section */
 .create-pin-section {
     display: none;
@@ -194,4 +219,69 @@
     color: var(--nvidia-neon);
     margin-bottom: 1rem;
     text-shadow: 0 0 20px rgba(118, 185, 0, 0.4);
+}
+
+/* ========================================= */
+/* Change PIN Section Styles                 */
+/* ========================================= */
+
+.change-pin-section {
+    display: none;
+}
+
+.change-pin-section.active {
+    display: block;
+}
+
+/* Step Indicator */
+.change-pin-steps {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.step {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 0.4rem 0.8rem;
+    border-radius: var(--radius-md);
+    background: var(--bg-deep);
+    border: 1px solid var(--glass-border);
+    transition: all 0.3s ease;
+}
+
+.step.active {
+    color: var(--nvidia-neon);
+    border-color: var(--nvidia-neon);
+    background: rgba(118, 185, 0, 0.1);
+    box-shadow: 0 0 10px rgba(118, 185, 0, 0.2);
+}
+
+.step.completed {
+    color: var(--text-secondary);
+    border-color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.step.completed::after {
+    content: ' ✓';
+    color: var(--nvidia-neon);
+}
+
+/* Change PIN Steps */
+.change-pin-step {
+    display: none;
+}
+
+.change-pin-step.active {
+    display: block;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
 }

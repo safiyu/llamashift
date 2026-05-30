@@ -5,3 +5,9 @@ __pycache__/
 *.pyc
 server_backup.py
 server_fixed.py
+*.lock
+dist/
+build/
+node_modules/
+*.min.js
+migrations/

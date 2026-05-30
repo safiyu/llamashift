@@ -232,6 +232,15 @@ function initUI() {
             showInitialPinScreen();
         });
     }
+
+    // Change PIN button
+    const btnChangePin = document.getElementById('btn-change-pin');
+    if (btnChangePin) {
+        btnChangePin.addEventListener('click', () => {
+            console.log('[DEBUG] Change PIN button clicked');
+            showChangePinScreen();
+        });
+    }
 }
 
 /**
@@ -1782,15 +1791,28 @@ async function handleImportModels() {
 // PIN Security System                       //
 // ========================================= //
 
-const PIN_STORAGE_KEY = 'llamashift_pin';
+const PIN_SET_KEY = 'llamashift_pin_set';
 const PIN_SESSION_KEY = 'llamashift_pin_session'; // Timestamp of last successful verification
+const PIN_SESSION_TOKEN_KEY = 'llamashift_pin_session_token';
 const PIN_SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
-// DOM Elements for PIN screens
-const pinOverlay = document.getElementById('pin-security-overlay');
-const createDisplay = Array.from(document.querySelectorAll('#pin-create-display .pin-digit'));
-const confirmDisplay = Array.from(document.querySelectorAll('#pin-confirm-display .pin-digit'));
-const verifyDisplay = Array.from(document.querySelectorAll('#pin-verify-display .pin-digit'));
+// DOM Elements for PIN screens (using getters to handle late DOM loading)
+const getPinOverlay = () => document.getElementById('pin-security-overlay');
+const getCreateDisplay = () => Array.from(document.querySelectorAll('#pin-create-display .pin-digit'));
+const getConfirmDisplay = () => Array.from(document.querySelectorAll('#pin-confirm-display .pin-digit'));
+const getVerifyDisplay = () => Array.from(document.querySelectorAll('#pin-verify-display .pin-digit'));
+
+// DOM Elements for Change PIN screens
+const getChangeVerifyDisplay = () => Array.from(document.querySelectorAll('#pin-change-verify-display .pin-digit'));
+const getChangeNewDisplay = () => Array.from(document.querySelectorAll('#pin-change-new-display .pin-digit'));
+const getChangeConfirmDisplay = () => Array.from(document.querySelectorAll('#pin-change-confirm-display .pin-digit'));
+const getChangeSection = () => document.getElementById('pin-change-section');
+const getChangeVerifyStep = () => document.getElementById('change-verify-step');
+const getChangeNewStep = () => document.getElementById('change-new-step');
+const getChangeConfirmStep = () => document.getElementById('change-confirm-step');
+const getStep1 = () => document.getElementById('step-1');
+const getStep2 = () => document.getElementById('step-2');
+const getStep3 = () => document.getElementById('step-3');
 
 const PinSecurity = {
     currentPin: '',
@@ -1801,53 +1823,86 @@ const PinSecurity = {
      * Check if PIN exists
      */
     hasPin: function() {
-        return localStorage.getItem(PIN_STORAGE_KEY) !== null;
+        return localStorage.getItem(PIN_SET_KEY) === 'true';
     },
 
     /**
-     * Get stored PIN hash
-     */
-    getStoredPin: function() {
-        return localStorage.getItem(PIN_STORAGE_KEY);
-    },
-
-    /**
-     * Save PIN (stores hash)
+     * Save PIN state locally for client-side flow
      */
     savePin: async function(pin) {
-        // Store as plain text for simplicity (6 digits is manageable)
-        // In production, you should hash this with a salt
-        localStorage.setItem(PIN_STORAGE_KEY, pin);
+        localStorage.setItem(PIN_SET_KEY, 'true');
         return true;
+    },
+
+    /**
+     * Verify a PIN with the backend and return whether it is valid
+     */
+    verifyPin: async function(pin) {
+        if (!pin) return false;
+
+        try {
+            const response = await fetch('/api/pin', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    action: 'verify',
+                    pin: pin
+                })
+            });
+
+            if (!response.ok) {
+                return false;
+            }
+
+            const data = await response.json();
+            if (data && data.success === true && data.sessionToken) {
+                localStorage.setItem(PIN_SESSION_TOKEN_KEY, data.sessionToken);
+            }
+            return data && data.success === true;
+        } catch (error) {
+            console.error('PIN verify failed:', error);
+            return false;
+        }
     },
 
     /**
      * Check PIN validity and update session
      */
+    getPinStatus: async function() {
+        try {
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            const sessionToken = localStorage.getItem(PIN_SESSION_TOKEN_KEY);
+            if (sessionToken) {
+                headers['X-Pin-Session'] = sessionToken;
+            }
+
+            const response = await fetch('/api/pin', {
+                method: 'GET',
+                headers
+            });
+            if (!response.ok) {
+                return { pinSet: this.hasPin(), sessionValid: false };
+            }
+            const data = await response.json();
+            return {
+                pinSet: data.pinSet === true || this.hasPin(),
+                sessionValid: data.sessionValid === true
+            };
+        } catch (error) {
+            console.error('Failed to fetch PIN status:', error);
+            return { pinSet: this.hasPin(), sessionValid: false };
+        }
+    },
+
     checkPinSecurity: async function() {
         if (!this.isSessionValid()) {
-            const storedPin = this.getStoredPin();
-            if (storedPin) {
-                try {
-                    const response = await fetch('/api/verify-pin', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            pin: storedPin
-                        })
-                    });
-
-                    if (response.ok) {
-                        this.updateSession();
-                    } else {
-                        this.clearPin();
-                    }
-                } catch (error) {
-                    console.error('Security check failed:', error);
-                    this.clearPin();
-                }
+            const status = await this.getPinStatus();
+            if (status.pinSet && status.sessionValid) {
+                this.updateSession();
             }
         }
         return this.isSessionValid();
@@ -1866,7 +1921,10 @@ const PinSecurity = {
     /**
      * Update session timestamp
      */
-    updateSession: function() {
+    updateSession: function(sessionToken) {
+        if (sessionToken) {
+            localStorage.setItem(PIN_SESSION_TOKEN_KEY, sessionToken);
+        }
         localStorage.setItem(PIN_SESSION_KEY, Date.now());
     },
 
@@ -1874,11 +1932,109 @@ const PinSecurity = {
      * Clear PIN (for debugging/testing)
      */
     clearPin: function() {
-        localStorage.removeItem(PIN_STORAGE_KEY);
+        localStorage.removeItem(PIN_SET_KEY);
         localStorage.removeItem(PIN_SESSION_KEY);
     },
 
 };
+
+/**
+ * Handle PIN creation (first step of PIN setup)
+ */
+function handleCreatePin() {
+    const pin = PinSecurity.currentPin;
+    const errorEl = document.getElementById('pin-create-error');
+    
+    if (!pin || pin.length < 6) {
+        if (errorEl) {
+            errorEl.textContent = 'PIN must be at least 6 digits';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    // Advance to confirm step
+    showConfirmPinScreen();
+}
+
+/**
+ * Handle PIN confirmation (second step of PIN setup)
+ */
+async function handleConfirmPin() {
+    const pin = PinSecurity.confirmedPin;
+    const createPin = PinSecurity.currentPin;
+    const errorEl = document.getElementById('pin-confirm-error');
+    
+    if (!pin || pin.length < 6) {
+        if (errorEl) {
+            errorEl.textContent = 'PIN must be at least 6 digits';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    if (pin !== createPin) {
+        if (errorEl) {
+            errorEl.textContent = 'PINs do not match';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    // Show loading state
+    const confirmBtn = document.getElementById('pin-confirm-done-btn');
+    confirmBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Setting...';
+    confirmBtn.disabled = true;
+    
+    try {
+        const response = await fetch('/api/pin', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                action: 'set',
+                pin: pin
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            // Store local flag that a PIN exists for client refresh behavior
+            await PinSecurity.savePin(pin);
+            // Clear PIN state
+            PinSecurity.currentPin = '';
+            PinSecurity.confirmedPin = '';
+            // Clear displays
+            getCreateDisplay().forEach(d => {
+                d.textContent = '';
+                d.classList.remove('filled');
+            });
+            getConfirmDisplay().forEach(d => {
+                d.textContent = '';
+                d.classList.remove('filled');
+            });
+            // Hide overlay
+            hidePinOverlay();
+            showToast('PIN set successfully', 'success');
+        } else {
+            if (errorEl) {
+                errorEl.textContent = data.message || 'Failed to set PIN';
+                errorEl.style.display = 'block';
+            }
+        }
+    } catch (error) {
+        console.error('PIN set error:', error);
+        if (errorEl) {
+            errorEl.textContent = 'Network error';
+            errorEl.style.display = 'block';
+        }
+    } finally {
+        confirmBtn.innerHTML = '<i class="fa-solid fa-check"></i> Done';
+        confirmBtn.disabled = false;
+    }
+}
 
 /**
  * Handle PIN verification
@@ -1903,33 +2059,20 @@ async function handlePinVerification() {
     verifyBtn.disabled = true;
     
     try {
-        const response = await fetch('/api/verify-pin', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                pin: pin
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (response.ok && data.success) {
-            // Store PIN in session storage
-            localStorage.setItem('llamashift_pin_session', pin);
-            // Clear any PIN state from memory - this is the key fix
+        const isVerified = await PinSecurity.verifyPin(pin);
+
+        if (isVerified) {
+            PinSecurity.updateSession();
             PinSecurity.currentPin = '';
             PinSecurity.confirmedPin = '';
-            // Reload page to apply session
-            window.location.reload();
+            hidePinOverlay();
         } else {
             if (errorEl) {
-                errorEl.textContent = data.message || 'Invalid PIN';
+                errorEl.textContent = 'Invalid PIN';
                 errorEl.style.display = 'block';
             }
             // Clear the PIN display
-            verifyDisplay.forEach(d => {
+            getVerifyDisplay().forEach(d => {
                 d.textContent = '';
                 d.classList.remove('filled');
             });
@@ -1951,11 +2094,16 @@ async function handlePinVerification() {
 /**
  * Show the appropriate PIN screen on page load
  */
-function showInitialPinScreen() {
-    if (PinSecurity.hasPin() && PinSecurity.isSessionValid()) {
-        // Already verified, skip to dashboard
-        window.location.reload();
-    } else if (PinSecurity.hasPin()) {
+async function showInitialPinScreen() {
+    const status = await PinSecurity.getPinStatus();
+
+    if (status.pinSet) {
+        if (PinSecurity.isSessionValid()) {
+            // Already verified locally, no PIN overlay needed
+            return;
+        }
+
+        // Ask user to verify with current PIN
         showVerifyPinScreen();
     } else {
         showCreatePinScreen();
@@ -1985,21 +2133,23 @@ function setupKeypadListeners() {
                     PinSecurity.confirmedPin = '';
                 } else if (currentMode === 'verify') {
                     PinSecurity.currentPin = '';
+                } else if (currentMode === 'change') {
+                    handleChangePinClear();
                 }
                 
                 // Clear display
                 if (currentMode === 'create') {
-                    createDisplay.forEach(d => {
+                    getCreateDisplay().forEach(d => {
                         d.textContent = '';
                         d.classList.remove('filled');
                     });
                 } else if (currentMode === 'confirm') {
-                    confirmDisplay.forEach(d => {
+                    getConfirmDisplay().forEach(d => {
                         d.textContent = '';
                         d.classList.remove('filled');
                     });
                 } else if (currentMode === 'verify') {
-                    verifyDisplay.forEach(d => {
+                    getVerifyDisplay().forEach(d => {
                         d.textContent = '';
                         d.classList.remove('filled');
                     });
@@ -2019,33 +2169,48 @@ function setupKeypadListeners() {
                 return;
             }
             
+            // Handle change PIN specific actions (verify, new, confirm buttons)
+            if (currentMode === 'change' && action && action.startsWith('change-')) {
+                handleChangePinAction(action);
+                return;
+            }
+
+            // Handle cancel button clicks in the change PIN flow
+            if (e.target.closest('.pin-cancel-btn')) {
+                handleCancelChangePin();
+                return;
+            }
+            
             // Only process numeric digits
             if (digit && !isNaN(digit) && digit !== '') {
                 // Handle digit input based on current mode
                 if (currentMode === 'create') {
                     // Add digit to create display
-                    const emptySlotIndex = Array.from(createDisplay).findIndex(d => !d.textContent);
+                    const emptySlotIndex = Array.from(getCreateDisplay()).findIndex(d => !d.textContent);
                     if (emptySlotIndex !== -1) {
-                        createDisplay[emptySlotIndex].textContent = digit;
-                        createDisplay[emptySlotIndex].classList.add('filled');
+                        getCreateDisplay()[emptySlotIndex].textContent = digit;
+                        getCreateDisplay()[emptySlotIndex].classList.add('filled');
                         PinSecurity.currentPin += digit;
                     }
                 } else if (currentMode === 'confirm') {
                     // Add digit to confirm display
-                    const emptySlotIndex = Array.from(confirmDisplay).findIndex(d => !d.textContent);
+                    const emptySlotIndex = Array.from(getConfirmDisplay()).findIndex(d => !d.textContent);
                     if (emptySlotIndex !== -1) {
-                        confirmDisplay[emptySlotIndex].textContent = digit;
-                        confirmDisplay[emptySlotIndex].classList.add('filled');
+                        getConfirmDisplay()[emptySlotIndex].textContent = digit;
+                        getConfirmDisplay()[emptySlotIndex].classList.add('filled');
                         PinSecurity.confirmedPin += digit;
                     }
                 } else if (currentMode === 'verify') {
                     // Add digit to verify display
-                    const emptySlotIndex = Array.from(verifyDisplay).findIndex(d => !d.textContent);
+                    const emptySlotIndex = Array.from(getVerifyDisplay()).findIndex(d => !d.textContent);
                     if (emptySlotIndex !== -1) {
-                        verifyDisplay[emptySlotIndex].textContent = digit;
-                        verifyDisplay[emptySlotIndex].classList.add('filled');
+                        getVerifyDisplay()[emptySlotIndex].textContent = digit;
+                        getVerifyDisplay()[emptySlotIndex].classList.add('filled');
                         PinSecurity.currentPin += digit;
                     }
+                } else if (currentMode === 'change') {
+                    // Add digit to change PIN display
+                    handleChangePinDigit(digit);
                 }
             }
         }
@@ -2061,7 +2226,7 @@ function handleClearInput() {
 
     if (currentMode === 'create') {
         // Remove last digit
-        const digits = Array.from(createDisplay);
+        const digits = Array.from(getCreateDisplay());
         for (let i = digits.length - 1; i >= 0; i--) {
             if (digits[i].textContent) {
                 digits[i].textContent = '';
@@ -2071,7 +2236,7 @@ function handleClearInput() {
             }
         }
     } else if (currentMode === 'confirm') {
-        const digits = Array.from(confirmDisplay);
+        const digits = Array.from(getConfirmDisplay());
         for (let i = digits.length - 1; i >= 0; i--) {
             if (digits[i].textContent) {
                 digits[i].textContent = '';
@@ -2081,7 +2246,7 @@ function handleClearInput() {
             }
         }
     } else if (currentMode === 'verify') {
-        const digits = Array.from(verifyDisplay);
+        const digits = Array.from(getVerifyDisplay());
         for (let i = digits.length - 1; i >= 0; i--) {
             if (digits[i].textContent) {
                 digits[i].textContent = '';
@@ -2118,7 +2283,7 @@ async function handleDoneInput() {
             showPinError('pin-confirm-section', 'PINs do not match. Please try again.');
             // Reset confirmation input
             PinSecurity.confirmedPin = '';
-            confirmDisplay.forEach(d => {
+            getConfirmDisplay().forEach(d => {
                 d.textContent = '';
                 d.classList.remove('filled');
             });
@@ -2152,10 +2317,10 @@ async function handleDoneInput() {
         } else {
             showPinError('pin-verify-section', 'Incorrect PIN. Please try again.');
             // Add error styling to digits
-            verifyDisplay.forEach(d => d.classList.add('error'));
+            getVerifyDisplay().forEach(d => d.classList.add('error'));
             setTimeout(() => {
                 PinSecurity.currentPin = '';
-                verifyDisplay.forEach(d => {
+                getVerifyDisplay().forEach(d => {
                     d.textContent = '';
                     d.classList.remove('filled');
                     d.classList.remove('error');
@@ -2175,6 +2340,8 @@ function getCurrentPinMode() {
         return 'confirm';
     } else if (document.getElementById('pin-verify-section').classList.contains('active')) {
         return 'verify';
+    } else if (document.getElementById('pin-change-section').classList.contains('active')) {
+        return 'change';
     }
     return null;
 }
@@ -2200,15 +2367,15 @@ function showCreatePinScreen() {
     PinSecurity.currentPin = '';
     
     // Clear all displays
-    createDisplay.forEach(d => {
+    getCreateDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
-    confirmDisplay.forEach(d => {
+    getConfirmDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
-    verifyDisplay.forEach(d => {
+    getVerifyDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
@@ -2223,9 +2390,9 @@ function showCreatePinScreen() {
     if (verifySection) verifySection.classList.remove('active');
     
     // Show overlay
-    if (pinOverlay) {
-        pinOverlay.classList.remove('hidden');
-        pinOverlay.classList.add('open');
+    if (getPinOverlay()) {
+        getPinOverlay().classList.remove('hidden');
+        getPinOverlay().classList.add('open');
     }
 }
 
@@ -2242,7 +2409,7 @@ function showConfirmPinScreen() {
     
     // Clear confirm display
     PinSecurity.confirmedPin = '';
-    confirmDisplay.forEach(d => {
+    getConfirmDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
@@ -2270,7 +2437,7 @@ function showVerifyPinScreen() {
     
     // Clear verify display
     PinSecurity.currentPin = '';
-    verifyDisplay.forEach(d => {
+    getVerifyDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
@@ -2283,9 +2450,9 @@ function showVerifyPinScreen() {
     }
     
     // Show overlay
-    if (pinOverlay) {
-        pinOverlay.classList.remove('hidden');
-        pinOverlay.classList.add('open');
+    if (getPinOverlay()) {
+        getPinOverlay().classList.remove('hidden');
+        getPinOverlay().classList.add('open');
     }
 }
 
@@ -2293,12 +2460,386 @@ function showVerifyPinScreen() {
  * Hide PIN overlay
  */
 function hidePinOverlay() {
-    if (pinOverlay) {
-        pinOverlay.classList.remove('open');
+    if (getPinOverlay()) {
+        getPinOverlay().classList.remove('open');
         setTimeout(() => {
-            pinOverlay.classList.add('hidden');
+            getPinOverlay().classList.add('hidden');
         }, 300);
     }
+}
+
+// ========================================= //
+// Change PIN System                         //
+// ========================================= //
+
+const ChangePin = {
+    currentPin: '',
+    newPin: '',
+    confirmedPin: '',
+    maxDigits: 6,
+};
+
+/**
+ * Show Change PIN screen
+ */
+function showChangePinScreen() {
+    // Reset all change PIN state
+    ChangePin.currentPin = '';
+    ChangePin.newPin = '';
+    ChangePin.confirmedPin = '';
+    
+    // Clear all displays
+    getChangeVerifyDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    getChangeNewDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    getChangeConfirmDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    
+    // Clear all error messages
+    const verifyErr = document.getElementById('pin-change-verify-error');
+    const newErr = document.getElementById('pin-change-new-error');
+    const confirmErr = document.getElementById('pin-change-confirm-error');
+    if (verifyErr) verifyErr.textContent = '';
+    if (newErr) newErr.textContent = '';
+    if (confirmErr) confirmErr.textContent = '';
+    
+    // Reset step indicators
+    goToChangePinStep(1);
+    
+    // Show change section and overlay
+    const createSection = document.getElementById('pin-create-section');
+    const confirmSection = document.getElementById('pin-confirm-section');
+    const verifySection = document.getElementById('pin-verify-section');
+    const changeSection = document.getElementById('pin-change-section');
+
+    if (createSection) createSection.classList.remove('active');
+    if (confirmSection) confirmSection.classList.remove('active');
+    if (verifySection) verifySection.classList.remove('active');
+    if (changeSection) changeSection.classList.add('active');
+
+    if (getPinOverlay()) {
+        getPinOverlay().classList.remove('hidden');
+        getPinOverlay().classList.add('open');
+    }
+}
+
+/**
+ * Go to a specific step in the change PIN flow
+ */
+function goToChangePinStep(step) {
+    // Hide all steps
+    if (getChangeVerifyStep()) getChangeVerifyStep().classList.remove('active');
+    if (getChangeNewStep()) getChangeNewStep().classList.remove('active');
+    if (getChangeConfirmStep()) getChangeConfirmStep().classList.remove('active');
+    
+    // Update step indicators
+    if (getStep1()) { getStep1().classList.toggle('active', step >= 1); getStep1().classList.toggle('completed', step > 1); }
+    if (getStep2()) { getStep2().classList.toggle('active', step >= 2); getStep2().classList.toggle('completed', step > 2); }
+    if (getStep3()) { getStep3().classList.toggle('active', step >= 3); }
+    
+    // Show current step
+    if (step === 1 && getChangeVerifyStep()) getChangeVerifyStep().classList.add('active');
+    else if (step === 2 && getChangeNewStep()) getChangeNewStep().classList.add('active');
+    else if (step === 3 && getChangeConfirmStep()) getChangeConfirmStep().classList.add('active');
+}
+
+/**
+ * Show error in change PIN flow
+ */
+function showChangePinError(step, message) {
+    const errorId = step === 1 ? 'pin-change-verify-error' :
+                    step === 2 ? 'pin-change-new-error' :
+                    'pin-change-confirm-error';
+    const errorEl = document.getElementById(errorId);
+    if (errorEl) {
+        errorEl.textContent = message;
+        errorEl.style.display = 'block';
+    }
+}
+
+/**
+ * Handle change PIN verification (step 1)
+ */
+async function handleChangePinVerify() {
+    const pin = ChangePin.currentPin;
+    
+    if (pin.length !== 6) {
+        showChangePinError(1, 'Please enter your 6-digit PIN');
+        return;
+    }
+    
+    // Show loading state
+    const btn = document.querySelector('[data-action="change-verify"]');
+    const originalText = btn ? btn.textContent : '';
+    if (btn) {
+        btn.textContent = 'VERIFYING...';
+        btn.disabled = true;
+    }
+    
+    try {
+        const response = await fetch('/api/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'verify',
+                pin: pin
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            // Current PIN is correct, move to step 2
+            goToChangePinStep(2);
+            // Clear the verify display but keep current PIN value for comparison
+            getChangeVerifyDisplay().forEach(d => {
+                d.textContent = '';
+                d.classList.remove('filled');
+            });
+        } else {
+            showChangePinError(1, data.message || 'Invalid current PIN');
+            getChangeVerifyDisplay().forEach(d => d.classList.add('error'));
+            setTimeout(() => {
+                getChangeVerifyDisplay().forEach(d => {
+                    d.classList.remove('error');
+                    d.textContent = '';
+                });
+                ChangePin.currentPin = '';
+            }, 800);
+        }
+    } catch (error) {
+        console.error('Change PIN verification error:', error);
+        showChangePinError(1, 'Network error. Please try again.');
+    } finally {
+        if (btn) {
+            btn.textContent = originalText;
+            btn.disabled = false;
+        }
+    }
+}
+
+/**
+ * Handle new PIN entry (step 2)
+ */
+function handleChangePinNew() {
+    const pin = ChangePin.newPin;
+    
+    if (pin.length !== 6) {
+        showChangePinError(2, 'Please enter a 6-digit PIN');
+        return;
+    }
+    
+    if (ChangePin.currentPin && pin === ChangePin.currentPin) {
+        showChangePinError(2, 'New PIN must be different from current PIN');
+        return;
+    }
+    
+    // Move to step 3
+    goToChangePinStep(3);
+    // Clear the new PIN display only; keep the new PIN value for confirmation
+    getChangeNewDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled');
+    });
+}
+
+/**
+ * Handle change PIN confirmation (step 3)
+ */
+async function handleChangePinConfirm() {
+    const pin = ChangePin.confirmedPin;
+    
+    if (pin.length !== 6) {
+        showChangePinError(3, 'Please confirm your 6-digit PIN');
+        return;
+    }
+    
+    if (pin !== ChangePin.newPin) {
+        showChangePinError(3, 'PINs do not match. Please try again.');
+        getChangeConfirmDisplay().forEach(d => d.classList.add('error'));
+        setTimeout(() => {
+            getChangeConfirmDisplay().forEach(d => {
+                d.classList.remove('error');
+                d.textContent = '';
+            });
+            ChangePin.confirmedPin = '';
+        }, 800);
+        return;
+    }
+    
+    // Show loading state
+    const btn = document.querySelector('[data-action="change-confirm"]');
+    const originalText = btn ? btn.textContent : '';
+    if (btn) {
+        btn.textContent = 'CHANGING...';
+        btn.disabled = true;
+    }
+    
+    try {
+        const response = await fetch('/api/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'change',
+                currentPin: ChangePin.currentPin,
+                newPin: pin
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            showToast('PIN changed successfully!', 'success');
+            hidePinOverlay();
+        } else {
+            showChangePinError(3, data.message || 'Failed to change PIN');
+        }
+    } catch (error) {
+        console.error('Change PIN confirmation error:', error);
+        showChangePinError(3, 'Network error. Please try again.');
+    } finally {
+        if (btn) {
+            btn.textContent = originalText;
+            btn.disabled = false;
+        }
+    }
+}
+
+/**
+ * Handle change PIN keypad actions
+ */
+function handleChangePinAction(action) {
+    if (action === 'change-verify') {
+        handleChangePinVerify();
+    } else if (action === 'change-new') {
+        handleChangePinNew();
+    } else if (action === 'change-confirm') {
+        handleChangePinConfirm();
+    }
+}
+
+/**
+ * Get current change PIN step
+ */
+function getCurrentChangePinStep() {
+    if (getChangeVerifyStep() && getChangeVerifyStep().classList.contains('active')) return 1;
+    if (getChangeNewStep() && getChangeNewStep().classList.contains('active')) return 2;
+    if (getChangeConfirmStep() && getChangeConfirmStep().classList.contains('active')) return 3;
+    return null;
+}
+
+/**
+ * Handle digit input in change PIN flow
+ */
+function handleChangePinDigit(digit) {
+    const step = getCurrentChangePinStep();
+    
+    if (step === 1) {
+        const display = Array.from(getChangeVerifyDisplay());
+        const emptySlot = display.findIndex(d => !d.textContent);
+        if (emptySlot !== -1) {
+            display[emptySlot].textContent = digit;
+            display[emptySlot].classList.add('filled');
+            ChangePin.currentPin += digit;
+        }
+    } else if (step === 2) {
+        const display = Array.from(getChangeNewDisplay());
+        const emptySlot = display.findIndex(d => !d.textContent);
+        if (emptySlot !== -1) {
+            display[emptySlot].textContent = digit;
+            display[emptySlot].classList.add('filled');
+            ChangePin.newPin += digit;
+        }
+    } else if (step === 3) {
+        const display = Array.from(getChangeConfirmDisplay());
+        const emptySlot = display.findIndex(d => !d.textContent);
+        if (emptySlot !== -1) {
+            display[emptySlot].textContent = digit;
+            display[emptySlot].classList.add('filled');
+            ChangePin.confirmedPin += digit;
+        }
+    }
+}
+
+/**
+ * Handle clear input in change PIN flow
+ */
+function handleChangePinClear() {
+    const step = getCurrentChangePinStep();
+    
+    if (step === 1) {
+        ChangePin.currentPin = ChangePin.currentPin.slice(0, -1);
+        for (let i = getChangeVerifyDisplay().length - 1; i >= 0; i--) {
+            if (getChangeVerifyDisplay()[i].textContent) {
+                getChangeVerifyDisplay()[i].textContent = '';
+                getChangeVerifyDisplay()[i].classList.remove('filled');
+                break;
+            }
+        }
+    } else if (step === 2) {
+        ChangePin.newPin = ChangePin.newPin.slice(0, -1);
+        for (let i = getChangeNewDisplay().length - 1; i >= 0; i--) {
+            if (getChangeNewDisplay()[i].textContent) {
+                getChangeNewDisplay()[i].textContent = '';
+                getChangeNewDisplay()[i].classList.remove('filled');
+                break;
+            }
+        }
+    } else if (step === 3) {
+        ChangePin.confirmedPin = ChangePin.confirmedPin.slice(0, -1);
+        for (let i = getChangeConfirmDisplay().length - 1; i >= 0; i--) {
+            if (getChangeConfirmDisplay()[i].textContent) {
+                getChangeConfirmDisplay()[i].textContent = '';
+                getChangeConfirmDisplay()[i].classList.remove('filled');
+                break;
+            }
+        }
+    }
+}
+
+/**
+ * Handle cancel button in change PIN flow
+ */
+function handleCancelChangePin() {
+    // Reset all PIN values
+    ChangePin.currentPin = '';
+    ChangePin.newPin = '';
+    ChangePin.confirmedPin = '';
+    
+    // Clear all displays
+    getChangeVerifyDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    getChangeNewDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    getChangeConfirmDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    
+    // Clear all error messages
+    const verifyErr = document.getElementById('pin-change-verify-error');
+    const newErr = document.getElementById('pin-change-new-error');
+    const confirmErr = document.getElementById('pin-change-confirm-error');
+    if (verifyErr) verifyErr.textContent = '';
+    if (newErr) newErr.textContent = '';
+    if (confirmErr) confirmErr.textContent = '';
+    
+    // Reset step indicators
+    goToChangePinStep(1);
+    
+    // Hide the PIN overlay
+    hidePinOverlay();
 }
 
 // ==============================
@@ -2308,7 +2849,7 @@ function hidePinOverlay() {
 /**
  * Initialize PIN security system
  */
-function initPinSecurity() {
+async function initPinSecurity() {
     setupKeypadListeners();
-    showInitialPinScreen(); // Ensure the PIN screen is shown if needed
+    await showInitialPinScreen(); // Ensure the PIN screen is shown if needed
 }

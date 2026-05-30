@@ -65,9 +65,11 @@ htmlcov/
 .aider.tags.cache.v4
 .aider.chat.history.md
 .aider.input.history
+.aiderignore
 
 # Cline AI
 .clineignore
+.clinerules.md
 
 # Temporary files
 *.tmp
@@ -79,3 +81,4 @@ htmlcov/
 .DS_Store
 *.sublime-project
 *.sublime-workspace
+.aider*

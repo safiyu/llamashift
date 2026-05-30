@@ -5,16 +5,19 @@ Handles HTTP API endpoints for model management, configuration, and control.
 """
 
 import asyncio
+import http
 import json
 import os
 import re
 import socketserver
+import subprocess
+import sys
 import threading
 import time
 import urllib.parse
 import websockets
 
-from config import HAS_SYSTEMD, IS_WINDOWS, IS_DOCKER
+from config import HAS_SYSTEMD, IS_WINDOWS, IS_DOCKER, DEFAULT_RUNTIME_PARAMS, STATIC_DIR
 
 # Global state for server readiness
 _server_ready = False
@@ -35,11 +38,14 @@ def is_server_ready():
 
 
 # ─── HTTP API Handler Class ────────────────────────────────────────────────
-class SwitcherAPIHandler(socketserver.BaseRequestHandler):
+class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
     """HTTP API handler for llama-shift server."""
     
     def log_message(self, format, *args):
         pass  # Suppress default logging
+    
+    def version_string(self):
+        return 'llama-shift/0.1.0'
     
     def end_headers(self):
         # Add security headers
@@ -83,6 +89,10 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
             self.handle_api_models_import_post()
         elif path == "/api/models":
             self.handle_api_models_get()
+        elif path == "/api/pin" or path == "/api/pin/status":
+            self.handle_api_pin()
+        elif path == "/api/devices":
+            self.handle_api_devices()
         elif path == "/api/mcp":
             self.handle_api_mcp_status()
         elif path == "/api/files":
@@ -90,15 +100,20 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
         else:
             self.serve_static(path)
     
-    def do_PATCH(self):
+    def do_PUT(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         
-        if path == "/api/models":
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode('utf-8')
-            data = json.loads(body)
-            self.handle_api_model_patch(data)
+        # Handle /api/models/{modelId}
+        if path.startswith("/api/models/"):
+            model_id = path[len("/api/models/"):]
+            if model_id:
+                content_length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(content_length).decode('utf-8')
+                data = json.loads(body)
+                self.handle_api_model_put(model_id, data)
+            else:
+                self.send_error_response(400, "Missing model id")
         else:
             self.send_error_response(404, "Endpoint not found")
     
@@ -118,7 +133,8 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
         path = parsed_url.path
         
         if path in ["/api/start", "/api/stop", "/api/stop_all", "/api/start_all", 
-                    "/api/config", "/api/mcp", "/api/restart", "/api/pin"]:
+                    "/api/config", "/api/mcp", "/api/restart", "/api/pin",
+                    "/api/admin/reset-pin"]:
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length).decode('utf-8')
             
@@ -148,6 +164,8 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
                 self.handle_api_pin(data)
             elif path == "/api/models":
                 self.handle_api_models_post(data)
+            elif path == "/api/admin/reset-pin":
+                self.handle_api_admin_reset_pin()
         else:
             self.send_error_response(404, "Endpoint not found")
     
@@ -335,11 +353,11 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
             }
         })
     
-    def handle_api_gpu(self):
-        """Get GPU telemetry data."""
-        from process import get_gpu_telemetry
-        telemetry = get_gpu_telemetry()
-        self.send_json_response(telemetry)
+    def handle_api_devices(self):
+        """Get available GPU devices for model assignment."""
+        from process import get_available_devices
+        devices = get_available_devices()
+        self.send_json_response(devices)
     
     def handle_api_logs(self, query):
         """Get log file contents for a model."""
@@ -921,7 +939,7 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
             "message": f"Model '{model_id}' deleted successfully"
         })
     
-    def handle_api_pin(self):
+    def handle_api_pin(self, data=None):
         """Handle PIN-related API requests."""
         from security import (
             _is_rate_limited, _is_account_locked, _record_failed_attempt,
@@ -1012,6 +1030,7 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
                     self.send_json_response({
                         "success": True,
                         "sessionValid": True,
+                        "sessionToken": session_token,
                         "message": "PIN verified successfully"
                     })
                 else:
@@ -1021,6 +1040,7 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
                         self.send_error_response(401, "Invalid PIN")
             
             elif action == "set":
+                from config import _CONFIG, _config_lock, save_config
                 pin = data.get("pin", "")
                 if not pin:
                     self.send_error_response(400, "Missing PIN")
@@ -1034,7 +1054,6 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
                 salt = secrets.token_hex(16)
                 pin_hash = _hash_pin(pin, salt)
                 
-                from config import _config_lock, save_config
                 with _config_lock:
                     _CONFIG["pinHash"] = pin_hash
                     _CONFIG["pinSalt"] = salt
@@ -1064,8 +1083,76 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
                 
                 self.send_error_response(401, "Invalid or expired session")
             
+            elif action == "change":
+                # Change PIN - verify current PIN first, then set new PIN
+                current_pin = data.get("currentPin", "")
+                new_pin = data.get("newPin", "")
+                
+                if not current_pin or not new_pin:
+                    self.send_error_response(400, "Missing current PIN or new PIN")
+                    return
+                
+                if len(new_pin) < 6:
+                    self.send_error_response(400, "New PIN must be at least 6 digits")
+                    return
+                
+                # Verify current PIN
+                salt = _CONFIG.get("pinSalt", "")
+                current_hash = _hash_pin(current_pin, salt)
+                stored_hash = _CONFIG.get("pinHash", "")
+                
+                if current_hash != stored_hash:
+                    self.send_error_response(401, "Invalid current PIN")
+                    return
+                
+                # Set new PIN
+                import secrets
+                new_salt = secrets.token_hex(16)
+                new_pin_hash = _hash_pin(new_pin, new_salt)
+                
+                from config import _config_lock, save_config
+                with _config_lock:
+                    _CONFIG["pinHash"] = new_pin_hash
+                    _CONFIG["pinSalt"] = new_salt
+                    _CONFIG["pinSetAt"] = int(time.time())
+                
+                save_config(_CONFIG)
+                
+                self.send_json_response({
+                    "success": True,
+                    "message": "PIN changed successfully"
+                })
+            
             else:
-                self.send_error_response(400, "Invalid action. Use 'verify', 'set', or 'verify-session'")
+                self.send_error_response(400, "Invalid action. Use 'verify', 'set', 'verify-session', or 'change'")
+    
+    def handle_api_admin_reset_pin(self):
+        """Reset admin PIN - requires admin PIN authentication."""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8')
+            data = json.loads(body)
+            
+            new_pin = data.get("newPin")
+            if not new_pin or len(new_pin) < 4:
+                self.send_error_response(400, "New PIN must be at least 4 characters long")
+                return
+            
+            # Import and use the reset function from main
+            from main import reset_admin_pin
+            success, message = reset_admin_pin(new_pin)
+            
+            if success:
+                self.send_json_response({
+                    "success": True,
+                    "message": message
+                })
+            else:
+                self.send_error_response(400, message)
+        except json.JSONDecodeError:
+            self.send_error_response(400, "Invalid JSON in request body")
+        except Exception as e:
+            self.send_error_response(500, f"Reset error: {str(e)}")
     
     def handle_api_models_export(self):
         """Export all model configurations as JSON."""
@@ -1391,3 +1478,192 @@ class SwitcherAPIHandler(socketserver.BaseRequestHandler):
             os._exit(0)
         
         threading.Thread(target=do_restart, daemon=True).start()
+    
+    def handle_api_model_put(self, model_id, data):
+        """PUT /api/models/{modelId} - update model configuration (full config payload)."""
+        from config import MODELS, _CONFIG, save_config, _models_lock, _models_cache, get_global_mode
+        from process import (
+            get_running_servers, kill_process, _model_processes, _proc_lock,
+            _active_processes, _active_processes_lock, _log_handles, _log_lock
+        )
+        
+        if model_id not in MODELS:
+            self.send_error_response(400, f"Invalid or missing model id: {model_id}")
+            return
+        
+        updates = {}
+        allowed = {
+            "name", "desc", "filename", "port", "ctxSize", "nParallel",
+            "nGpuLayers", "batchSize", "threads", "temperature",
+            "maxTokens", "topP", "devices", "extraArgs", "mmproj",
+        }
+        
+        for key, value in data.items():
+            if key in allowed and key != "id":
+                updates[key] = value
+        
+        if not updates:
+            self.send_error_response(400, "No valid fields to update")
+            return
+        
+        # Validate port uniqueness if port is being changed
+        if "port" in updates:
+            new_port = int(updates["port"])
+            for existing_id, existing_cfg in MODELS.items():
+                if existing_id != model_id and existing_cfg.get("port") == new_port:
+                    self.send_error_response(409, f"Port {new_port} is already assigned to model '{existing_id}'")
+                    return
+        
+        runtime_params = {"ctxSize", "nParallel", "nGpuLayers", "batchSize", "threads",
+                          "extraArgs", "devices", "mmproj", "port", "filename"}
+        requires_restart = bool(runtime_params & set(updates.keys()))
+        
+        was_running = False
+        if requires_restart:
+            running = get_running_servers()
+            mode = get_global_mode()
+            old_model_cfg = MODELS[model_id]
+            old_port = old_model_cfg.get("port")
+            
+            if mode == "multi_port" and old_port and old_port in running:
+                was_running = True
+            elif mode == "single_port":
+                from process import _cleanup_stale_tracked_processes, is_llama_server
+                _cleanup_stale_tracked_processes()
+                with _proc_lock:
+                    for mid, proc in list(_model_processes.items()):
+                        if mid == model_id and is_llama_server(proc.pid):
+                            was_running = True
+                            break
+        
+        with _models_lock:
+            _CONFIG["models"][model_id].update(updates)
+            _models_cache = None
+        save_config(_CONFIG)
+        
+        response_data = {
+            "success": True,
+            "model": model_id,
+            "updated": updates,
+            "config": dict(_CONFIG["models"][model_id]),
+        }
+        
+        if was_running and requires_restart:
+            def restart_model_after_put():
+                time.sleep(0.5)
+                try:
+                    running = get_running_servers()
+                    mode = get_global_mode()
+                    new_model_cfg = MODELS[model_id]
+                    new_port = new_model_cfg.get("port")
+                    
+                    if mode == "multi_port" and new_port and new_port in running:
+                        pid = running[new_port]["pid"]
+                        kill_process(pid)
+                        with _log_lock:
+                            handle = _log_handles.pop(model_id, None)
+                            if handle:
+                                try:
+                                    handle.close()
+                                except OSError:
+                                    pass
+                        with _proc_lock:
+                            _model_processes.pop(model_id, None)
+                            with _active_processes_lock:
+                                _active_processes.discard(model_id)
+                    elif mode == "single_port":
+                        from process import _cleanup_stale_tracked_processes, is_llama_server
+                        _cleanup_stale_tracked_processes()
+                        master_port = _CONFIG.get("masterPort", 9000)
+                        if master_port in running:
+                            pid = running[master_port]["pid"]
+                            kill_process(pid)
+                            with _proc_lock:
+                                for mid2, proc in list(_model_processes.items()):
+                                    try:
+                                        if proc.pid == pid:
+                                            _model_processes.pop(mid2, None)
+                                            with _active_processes_lock:
+                                                _active_processes.discard(mid2)
+                                            break
+                                    except:
+                                        pass
+                            with _log_lock:
+                                handle = _log_handles.pop(model_id, None)
+                                if handle:
+                                    try:
+                                        handle.close()
+                                    except OSError:
+                                        pass
+                    
+                    port = new_port if mode == "multi_port" else _CONFIG.get("masterPort", 9000)
+                    
+                    import socket
+                    for _wait_attempt in range(20):
+                        time.sleep(0.5)
+                        _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        try:
+                            _sock.settimeout(1)
+                            _result = _sock.connect_ex(('127.0.0.1', int(port)))
+                            if _result != 0:
+                                break
+                        finally:
+                            _sock.close()
+                    
+                    binary_path = _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
+                    data_dir = _CONFIG.get("dataDir", "~/models")
+                    model_path = os.path.join(os.path.expanduser(data_dir), new_model_cfg["filename"])
+                    
+                    n_parallel = new_model_cfg.get("nParallel", 1)
+                    n_gpu_layers = new_model_cfg.get("nGpuLayers", DEFAULT_RUNTIME_PARAMS["nGpuLayers"])
+                    devices_list = new_model_cfg.get("devices", ["ROCm0"])
+                    device_str = ",".join(devices_list)
+                    
+                    cmd_args = [
+                        binary_path,
+                        "--model", model_path,
+                        "--device", device_str,
+                        "-ngl", str(n_gpu_layers),
+                        "--ctx-size", str(new_model_cfg["ctxSize"]),
+                        "-np", str(n_parallel),
+                        "--port", str(port),
+                        "--host", "0.0.0.0"
+                    ]
+                    
+                    if "mmproj" in new_model_cfg:
+                        mmproj_path = os.path.join(os.path.expanduser(data_dir), new_model_cfg["mmproj"])
+                        cmd_args.extend(["--mmproj", mmproj_path])
+                    
+                    if "extraArgs" in new_model_cfg:
+                        cmd_args.extend(new_model_cfg["extraArgs"])
+                    
+                    log_file = open(new_model_cfg["logPath"], "w", buffering=1)
+                    with _log_lock:
+                        _log_handles[model_id] = log_file
+                    
+                    proc_kwargs = {
+                        "stdout": log_file,
+                        "stderr": subprocess.STDOUT,
+                    }
+                    if not IS_WINDOWS:
+                        proc_kwargs["start_new_session"] = True
+                    
+                    proc = subprocess.Popen(cmd_args, **proc_kwargs)
+                    with _proc_lock:
+                        _model_processes[model_id] = proc
+                        with _active_processes_lock:
+                            _active_processes.add(model_id)
+                    
+                    print(f"[put_restart] Model {model_id} restarted with new config")
+                except Exception as e:
+                    print(f"[put_restart] Failed to restart model {model_id}: {e}")
+                    with _log_lock:
+                        _log_handles.pop(model_id, None)
+                    with _proc_lock:
+                        _model_processes.pop(model_id, None)
+            
+            threading.Thread(target=restart_model_after_put, daemon=True).start()
+            response_data["restarted"] = True
+            response_data["message"] = "Configuration saved. Model is restarting with new settings."
+        
+        self.send_json_response(response_data)
