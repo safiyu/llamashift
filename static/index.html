@@ -68,12 +68,6 @@
             <button id="btn-refresh" class="btn btn-secondary" title="Force refresh system state">
                 <i class="fa-solid fa-arrows-rotate"></i>
             </button>
-            <button id="btn-change-password" class="btn btn-secondary" title="Change your security PIN">
-                <i class="fa-solid fa-key"></i>
-            </button>
-            <button id="btn-reset-pin" class="btn btn-warning btn-glow" title="Reset your security PIN (requires admin access)">
-                <i class="fa-solid fa-rotate-left"></i>
-            </button>
         </div>
     </header>
 
@@ -537,114 +531,6 @@
     </div>
 
     <script src="index.js?v=4"></script>
-
-    <!-- Change Password Modal -->
-    <div id="change-password-overlay" class="modal-overlay">
-        <div class="config-modal" style="max-width: 440px;">
-            <div class="config-modal-header">
-                <div class="config-modal-title">
-                    <i class="fa-solid fa-key neon-glow-icon"></i>
-                    CHANGE SECURITY PIN
-                </div>
-                <button id="btn-close-change-password" class="config-modal-close">&times;</button>
-            </div>
-            <div class="config-modal-body">
-                <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 1.5rem;">
-                    Enter your current PIN and a new 6-digit PIN to update your security credentials.
-                </p>
-                
-                <!-- Current PIN Input -->
-                <div class="config-section">
-                    <div class="config-section-title">
-                        <i class="fa-solid fa-lock"></i> Current PIN
-                    </div>
-                    <div class="config-field">
-                        <input type="password" id="current-pin-input" placeholder="Enter your current 6-digit PIN" maxlength="6">
-                    </div>
-                </div>
-
-                <!-- New PIN Input -->
-                <div class="config-section">
-                    <div class="config-section-title">
-                        <i class="fa-solid fa-key"></i> New PIN
-                    </div>
-                    <div class="config-field">
-                        <input type="password" id="new-pin-input" placeholder="Enter new 6-digit PIN" maxlength="6">
-                    </div>
-                </div>
-
-                <!-- Confirm New PIN Input -->
-                <div class="config-section">
-                    <div class="config-section-title">
-                        <i class="fa-solid fa-check-circle"></i> Confirm New PIN
-                    </div>
-                    <div class="config-field">
-                        <input type="password" id="confirm-new-pin-input" placeholder="Re-enter new 6-digit PIN" maxlength="6">
-                    </div>
-                </div>
-
-                <!-- Error Message -->
-                <p id="change-password-error" style="color: var(--rose-neon); font-size: 0.85rem; margin-top: 1rem; min-height: 1.2em;"></p>
-            </div>
-            <div class="config-modal-footer">
-                <button id="btn-cancel-change-password" class="btn btn-secondary">
-                    <i class="fa-solid fa-xmark"></i> Cancel
-                </button>
-                <button id="btn-confirm-change-password" class="btn btn-warning">
-                    <i class="fa-solid fa-floppy-disk"></i> Change PIN
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Reset PIN Modal -->
-    <div id="reset-pin-overlay" class="modal-overlay">
-        <div class="config-modal" style="max-width: 440px;">
-            <div class="config-modal-header">
-                <div class="config-modal-title">
-                    <i class="fa-solid fa-rotate-left neon-glow-icon"></i>
-                    RESET SECURITY PIN
-                </div>
-                <button id="btn-close-reset-pin" class="config-modal-close">&times;</button>
-            </div>
-            <div class="config-modal-body">
-                <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 1.5rem;">
-                    Reset your security PIN. You will need to enter a new 6-digit PIN after this operation.
-                </p>
-                
-                <!-- New PIN Input -->
-                <div class="config-section">
-                    <div class="config-section-title">
-                        <i class="fa-solid fa-key"></i> New PIN
-                    </div>
-                    <div class="config-field">
-                        <input type="password" id="reset-new-pin-input" placeholder="Enter new 6-digit PIN" maxlength="6">
-                    </div>
-                </div>
-
-                <!-- Confirm New PIN Input -->
-                <div class="config-section">
-                    <div class="config-section-title">
-                        <i class="fa-solid fa-check-circle"></i> Confirm New PIN
-                    </div>
-                    <div class="config-field">
-                        <input type="password" id="reset-confirm-pin-input" placeholder="Re-enter new 6-digit PIN" maxlength="6">
-                    </div>
-                </div>
-
-                <!-- Error Message -->
-                <p id="reset-pin-error" style="color: var(--rose-neon); font-size: 0.85rem; margin-top: 1rem; min-height: 1.2em;"></p>
-            </div>
-            <div class="config-modal-footer">
-                <button id="btn-cancel-reset-pin" class="btn btn-secondary">
-                    <i class="fa-solid fa-xmark"></i> Cancel
-                </button>
-                <button id="btn-confirm-reset-pin" class="btn btn-warning">
-                    <i class="fa-solid fa-rotate-left"></i> Reset PIN
-                </button>
-            </div>
-        </div>
-    </div>
 
     <!-- PIN Security Overlay -->
     <div id="pin-security-overlay" class="pin-security-overlay hidden">
