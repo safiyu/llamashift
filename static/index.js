@@ -2214,13 +2214,19 @@ function showCreatePinScreen() {
     });
     
     // Show create section, hide others
-    document.getElementById('pin-create-section').classList.add('active');
-    document.getElementById('pin-confirm-section').classList.remove('active');
-    document.getElementById('pin-verify-section').classList.remove('active');
+    const createSection = document.getElementById('pin-create-section');
+    const confirmSection = document.getElementById('pin-confirm-section');
+    const verifySection = document.getElementById('pin-verify-section');
+    
+    if (createSection) createSection.classList.add('active');
+    if (confirmSection) confirmSection.classList.remove('active');
+    if (verifySection) verifySection.classList.remove('active');
     
     // Show overlay
-    pinOverlay.classList.remove('hidden');
-    pinOverlay.classList.add('open');
+    if (pinOverlay) {
+        pinOverlay.classList.remove('hidden');
+        pinOverlay.classList.add('open');
+    }
 }
 
 /**
@@ -2228,8 +2234,11 @@ function showCreatePinScreen() {
  */
 function showConfirmPinScreen() {
     // Hide create, show confirm
-    document.getElementById('pin-create-section').classList.remove('active');
-    document.getElementById('pin-confirm-section').classList.add('active');
+    const createSection = document.getElementById('pin-create-section');
+    const confirmSection = document.getElementById('pin-confirm-section');
+    
+    if (createSection) createSection.classList.remove('active');
+    if (confirmSection) confirmSection.classList.add('active');
     
     // Clear confirm display
     PinSecurity.confirmedPin = '';
@@ -2251,9 +2260,13 @@ function showConfirmPinScreen() {
  */
 function showVerifyPinScreen() {
     // Hide create and confirm, show verify
-    document.getElementById('pin-create-section').classList.remove('active');
-    document.getElementById('pin-confirm-section').classList.remove('active');
-    document.getElementById('pin-verify-section').classList.add('active');
+    const createSection = document.getElementById('pin-create-section');
+    const confirmSection = document.getElementById('pin-confirm-section');
+    const verifySection = document.getElementById('pin-verify-section');
+    
+    if (createSection) createSection.classList.remove('active');
+    if (confirmSection) confirmSection.classList.remove('active');
+    if (verifySection) verifySection.classList.add('active');
     
     // Clear verify display
     PinSecurity.currentPin = '';
@@ -2270,18 +2283,22 @@ function showVerifyPinScreen() {
     }
     
     // Show overlay
-    pinOverlay.classList.remove('hidden');
-    pinOverlay.classList.add('open');
+    if (pinOverlay) {
+        pinOverlay.classList.remove('hidden');
+        pinOverlay.classList.add('open');
+    }
 }
 
 /**
  * Hide PIN overlay
  */
 function hidePinOverlay() {
-    pinOverlay.classList.remove('open');
-    setTimeout(() => {
-        pinOverlay.classList.add('hidden');
-    }, 300);
+    if (pinOverlay) {
+        pinOverlay.classList.remove('open');
+        setTimeout(() => {
+            pinOverlay.classList.add('hidden');
+        }, 300);
+    }
 }
 
 // ==============================
