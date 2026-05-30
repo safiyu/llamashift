@@ -1921,8 +1921,8 @@ async function handlePinVerification() {
             // Clear any PIN state from memory - this is the key fix
             PinSecurity.currentPin = '';
             PinSecurity.confirmedPin = '';
-            // Redirect to dashboard
-            window.location.href = '/dashboard';
+            // Reload page to apply session
+            window.location.reload();
         } else {
             if (errorEl) {
                 errorEl.textContent = data.message || 'Invalid PIN';
@@ -1954,7 +1954,7 @@ async function handlePinVerification() {
 function showInitialPinScreen() {
     if (PinSecurity.hasPin() && PinSecurity.isSessionValid()) {
         // Already verified, skip to dashboard
-        window.location.href = '/dashboard';
+        window.location.reload();
     } else if (PinSecurity.hasPin()) {
         showVerifyPinScreen();
     } else {
@@ -2441,6 +2441,12 @@ async function handleResetPin() {
 const btnResetPin = document.getElementById('btn-reset-pin');
 if (btnResetPin) {
     btnResetPin.addEventListener('click', showResetPinModal);
+}
+
+// Change PIN button (if present in UI)
+const btnChangePin = document.getElementById('btn-change-pin');
+if (btnChangePin) {
+    btnChangePin.addEventListener('click', showResetPinModal);
 }
 
 // Close buttons
