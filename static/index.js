@@ -256,7 +256,7 @@ function showConfirmModal(message, onConfirm, onCancel) {
         modal.id = 'confirm-modal-overlay';
         modal.className = 'modal-overlay';
         modal.innerHTML = `
-            <div class="config-modal" style="max-width: 440px;">
+            <div class="config-modal" style="max-width: 440px; width: 90%;">
                 <div class="config-modal-header">
                     <div class="config-modal-title">
                         <i class="fa-solid fa-triangle-exclamation" style="color: var(--neon-glow);"></i>
@@ -264,10 +264,10 @@ function showConfirmModal(message, onConfirm, onCancel) {
                     </div>
                 </div>
                 <div class="config-modal-body">
-                    <p id="confirm-modal-message" style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 20px;"></p>
-                    <div style="display: flex; justify-content: flex-end; gap: 10px;">
-                        <button id="confirm-modal-cancel" class="btn btn-secondary">Cancel</button>
-                        <button id="confirm-modal-confirm" class="btn btn-start">Confirm</button>
+                    <p id="confirm-modal-message" style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 24px; text-align: center;"></p>
+                    <div style="display: flex; justify-content: center; gap: 12px; margin-top: 8px;">
+                        <button id="confirm-modal-cancel" type="button" class="btn btn-secondary" style="min-width: 110px; padding: 8px 16px;">Cancel</button>
+                        <button id="confirm-modal-confirm" type="button" class="btn btn-start" style="min-width: 110px; padding: 8px 16px;">Confirm</button>
                     </div>
                 </div>
             </div>
