@@ -41,6 +41,12 @@ Thumbs.db
 *.log
 logs/
 
+# Local scripts
+llama.sh
+
+# Local config (use config.json.template as a starting point)
+config.json
+
 # Environment variables
 .env
 .env.local
@@ -49,6 +55,10 @@ logs/
 # Backup files
 server_backup.py
 server_fixed.py
+*_backup.py
+*_fixed.py
+*_splitter.py
+*.b4low
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -70,6 +80,7 @@ htmlcov/
 # Cline AI
 .clineignore
 .clinerules.md
+.clinerules/
 
 # Temporary files
 *.tmp
@@ -82,3 +93,8 @@ htmlcov/
 *.sublime-project
 *.sublime-workspace
 .aider*
+
+# Dev task/todo notes (not production docs)
+*_improvements.md
+*_todos.md
+*_task-list.md

@@ -43,6 +43,59 @@ _models_lock = threading.Lock()
 # Log directory — derived from config appName (set after load)
 LOG_DIR = None
 
+# ─── Config File Watcher ──────────────────────────────────────────────────
+_config_mtime = 0.0
+_config_watcher_thread = None
+_config_watcher_stop = threading.Event()
+CONFIG_WATCH_INTERVAL = 5.0  # seconds between polls
+
+
+def _config_watcher_loop():
+    """Background thread that watches config.json for changes and auto-reloads."""
+    global _config_mtime
+    while not _config_watcher_stop.is_set():
+        try:
+            if os.path.exists(CONFIG_FILE):
+                current_mtime = os.path.getmtime(CONFIG_FILE)
+                if current_mtime != _config_mtime:
+                    _config_mtime = current_mtime
+                    print(f"[config] File changed — auto-reloading config...")
+                    try:
+                        reload_config()
+                    except Exception as e:
+                        print(f"[config] Auto-reload failed: {e}")
+        except Exception as e:
+            print(f"[config] Watcher error: {e}")
+        _config_watcher_stop.wait(CONFIG_WATCH_INTERVAL)
+
+
+def start_config_watcher():
+    """Start the background config file watcher thread."""
+    global _config_watcher_thread, _config_mtime
+    if _config_watcher_thread is not None and _config_watcher_thread.is_alive():
+        return  # already running
+
+    # Initialize mtime so we don't reload on first start
+    if os.path.exists(CONFIG_FILE):
+        _config_mtime = os.path.getmtime(CONFIG_FILE)
+
+    _config_watcher_stop.clear()
+    _config_watcher_thread = threading.Thread(
+        target=_config_watcher_loop, daemon=True, name="config-watcher"
+    )
+    _config_watcher_thread.start()
+    print(f"[config] Auto-reload watcher started (polling every {CONFIG_WATCH_INTERVAL}s)")
+
+
+def stop_config_watcher():
+    """Stop the background config file watcher thread."""
+    _config_watcher_stop.set()
+    global _config_watcher_thread
+    if _config_watcher_thread:
+        _config_watcher_thread.join(timeout=3)
+        _config_watcher_thread = None
+    print("[config] Auto-reload watcher stopped")
+
 
 # ─── Runtime Environment Detection ───────────────────────────────────────
 def detect_environment():
@@ -97,8 +150,11 @@ def get_server_port():
     return config.get(SERVER_PORT_KEY, 8002)
 
 
+CONFIG_TEMPLATE = "config.json.template"
+
+
 def load_config():
-    """Load the full config from config.json."""
+    """Load the full config from config.json. Falls back to template if missing."""
     try:
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r") as f:
@@ -106,7 +162,21 @@ def load_config():
                 print(f"[config] Loaded {len(cfg.get('models', {}))} models, mode={cfg.get('mode', 'single_port')}")
                 return cfg
     except Exception as e:
-        print(f"[config] Failed to load config: {e}, using defaults")
+        print(f"[config] Failed to load config: {e}, trying template...")
+
+    # Fallback: copy template to config.json if it exists
+    if os.path.exists(CONFIG_TEMPLATE):
+        print(f"[config] config.json not found — copying {CONFIG_TEMPLATE} -> {CONFIG_FILE}")
+        try:
+            with open(CONFIG_TEMPLATE, "r") as f:
+                template = json.load(f)
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(template, f, indent=4)
+            print(f"[config] Loaded template with {len(template.get('models', {}))} models")
+            return template
+        except Exception as e:
+            print(f"[config] Failed to load template: {e}, using defaults")
+
     return {"mode": "single_port", "models": {}}
 
 
@@ -215,3 +285,4 @@ def reset_config_for_testing():
 
 # Initialize config at module load so LOG_DIR and _CONFIG are set before any request
 init_config()
+start_config_watcher()

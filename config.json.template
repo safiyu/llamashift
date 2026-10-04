@@ -1,0 +1,31 @@
+{
+    "appName": "llamashift",
+    "serviceName": "llamashift",
+    "masterPort": 9000,
+    "binaryPath": "/path/to/llama-server",
+    "dataDir": "~/models",
+    "mode": "single_port",
+    "serverPort": 8002,
+    "models": {
+        "example_model": {
+            "id": "example_model",
+            "name": "Example Model",
+            "size": "0GB",
+            "desc": "Replace with your own model configuration",
+            "gpu": "Your GPU",
+            "devices": [
+                "ROCm0"
+            ],
+            "filename": "model-filename.gguf",
+            "port": 9000,
+            "ctxSize": 16384,
+            "nParallel": 1,
+            "endpoint": "http://localhost:9000/v1",
+            "maxTokens": 4096,
+            "extraArgs": [
+                "--flash-attn",
+                "on"
+            ]
+        }
+    }
+}
