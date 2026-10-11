@@ -241,10 +241,18 @@ class _ModelsProxy:
         return get_models()[key]
     def __contains__(self, key):
         return key in get_models()
+    def __iter__(self):
+        return iter(get_models())
+    def __len__(self):
+        return len(get_models())
+    def get(self, key, default=None):
+        return get_models().get(key, default)
     def items(self):
         return get_models().items()
     def keys(self):
         return get_models().keys()
+    def values(self):
+        return get_models().values()
 
 
 MODELS = _ModelsProxy()

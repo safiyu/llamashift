@@ -186,11 +186,18 @@ sudo bash install_service.sh     # Creates systemd service
 |-------|------|----------|-------------|
 | `appName` | string | No | Display name (default: `"llamashift"`) |
 | `serviceName` | string | No | Systemd/service name (default: `"llamashift"`) |
-| `masterPort` | int | No | Default model port (default: `9000`) |
+| `masterPort` | int | No | Shared model port for `single_port` mode (default: `9000`) — see [Port Assignment](#port-assignment) |
+| `serverPort` | int | No | Dashboard + API port (default: `8002`) |
 | `binaryPath` | string | **Yes** | Path to `llama-server` binary |
 | `dataDir` | string | **Yes** | Directory containing GGUF model files |
-| `mode` | string | No | `"single_port"` or `"multi_port"` |
+| `mode` | string | No | `"single_port"` or `"multi_port"` — see [Port Assignment](#port-assignment) |
+| `coldStartTimeoutSeconds` | int | No | Max seconds to wait for a gateway cold-start (default: `120`) |
+| `idleTimeoutMinutes` | int | No | Idle auto-unload threshold in minutes (default: `20`) |
+| `autoSpawnEnabled` | bool | No | Reserved: gateway on-demand auto-start toggle |
+| `openAiApiKey` | string | No | If set, the `/v1/*` gateway requires `Authorization: Bearer <key>` (see [Unified OpenAI Gateway](#unified-openai-gateway)) |
 | `models` | object | **Yes** | Model definitions (see below) |
+
+> **Status note:** `coldStartTimeoutSeconds` is active — the gateway uses it when it auto-starts a model on demand. `idleTimeoutMinutes` and `autoSpawnEnabled` are read by the idle-reaper in `process.py`, but **the reaper is not started at boot yet**, so idle auto-unload is dormant until `start_idle_reaper()` is wired into startup.
 
 ### Model Entry
 
@@ -216,11 +223,24 @@ sudo bash install_service.sh     # Creates systemd service
 | `id` | string | — | Unique model identifier (no spaces/special chars) |
 | `name` | string | — | Display name shown in UI |
 | `filename` | string | — | GGUF filename inside `dataDir` |
-| `port` | int | `masterPort` | HTTP API port for this model |
+| `port` | int | `masterPort` | This model's own API port. **Only used in `multi_port` mode, or in `single_port` when `dedicated: true`** — see [Port Assignment](#port-assignment) |
+| `dedicated` | bool | `false` | Keep this model on its own `port` even in `single_port` mode |
+| `binaryPath` | string | global `binaryPath` | Per-model `llama-server` binary (e.g. a CUDA build for one model, ROCm for another) |
+| `gpu` | string | — | GPU label shown in the UI (informational) |
+| `devices` | array | `["CPU0"]` | llama.cpp `--device` list, e.g. `["ROCm0"]` or `["CUDA0"]` |
 | `ctxSize` | int | `16384` | Context window size in tokens |
 | `nParallel` | int | `1` | Number of parallel request streams |
 | `nGpuLayers` | int | `99` | Number of layers offloaded to GPU (`999` = all) |
-| `endpoint` | string | auto | OpenAI-compatible API endpoint URL |
+| `batchSize` / `threads` | int | `2048` / `0` | llama.cpp batch size / CPU threads |
+| `temperature` / `topP` | float | `0.7` / `0.9` | Default sampling parameters (overridable per request) |
+| `maxTokens` | int | `4096` | Default max generated tokens |
+| `kvQuant` | string | — | KV-cache quant: `q8_0`, `q4_0`, `q8_1`, `q5_0`, `q5_1`, `bf16`, `f16` (`f16`/omitted = no quant). Emits `--cache-type-k/v` |
+| `flashAttention` | bool | `false` | Enable `--flash-attn on` |
+| `draftModel` | string | — | Speculative-decoding draft GGUF (path, or filename inside `dataDir`). Emits `--model-draft` |
+| `draftGpuLayers` | int | — | GPU layers for the draft model. Emits `--gpu-layers-draft` |
+| `mmproj` | string | — | Vision projector filename inside `dataDir` (emits `--mmproj`) |
+| `extraArgs` | array | `[]` | Extra raw llama-server flags appended verbatim |
+| `endpoint` | string | auto | OpenAI-compatible endpoint URL advertised in the UI |
 
 ### Updating Runtime Parameters
 
@@ -241,24 +261,122 @@ curl -X PATCH http://localhost:8002/api/models \
 
 ---
 
+## Port Assignment
+
+Which port a model actually listens on is decided by the **global `mode`** and the model's **`dedicated`** flag. This is the part most often misunderstood, so the exact rule:
+
+| `mode` | `dedicated` | Port the model runs on |
+|--------|-------------|------------------------|
+| `multi_port` | `false` | Its own `port` |
+| `multi_port` | `true` | Its own `port` (same as above) |
+| `single_port` | `false` (default) | **`masterPort`** — its own `port` is **ignored** |
+| `single_port` | `true` | Its own `port` |
+
+### What that means in practice
+
+- **`single_port` + non-dedicated models** all collapse onto `masterPort` (e.g. `9000`), and **only one of them can be live at a time** — starting a new one stops the previous non-dedicated model on that port. This is the mode you want when a frontend (Open WebUI, etc.) expects a single fixed endpoint.
+- **`dedicated: true`** opts a model *out* of the shared port so it keeps its own `port`, even inside `single_port` mode. Dedicated models are preserved (not killed) when you start a shared model.
+- **`multi_port`** uses every model's `port` directly and lets them run in parallel.
+
+> ⚠️ If you point a client directly at a model's `port` (e.g. `:9003`) in `single_port` mode, it only works if that model is `dedicated: true` — otherwise the model is actually on `masterPort`. Either set `"dedicated": true` on that model or switch the global `mode` to `"multi_port"`.
+
+### Example
+
+Given `mode: "single_port"`, `masterPort: 9000`:
+
+```
+qwen36       port=9000  dedicated=false  → runs on 9000
+qwen27       port=9003  dedicated=false  → runs on 9000  (9003 ignored)
+granite42_8b port=9001  dedicated=true   → runs on 9001  ✓ own port
+```
+
+`GET /api/active` reports each running model's **effective** port and endpoint, so you can always see where a model actually is.
+
+---
+
+## Unified OpenAI Gateway
+
+LlamaShift exposes a single OpenAI-compatible endpoint at the server port (default `http://localhost:8002/v1`). Point any OpenAI client there and set the `model` field to one of your model **ids** (or names):
+
+```
+OPENAI_BASE_URL=http://localhost:8002/v1
+```
+
+**Auth is optional.** If you set `openAiApiKey` in `config.json`, the gateway requires a matching `Authorization: Bearer <key>` header (anything else → `401`). If it's unset, the gateway accepts requests without a key — so leave it unset on a trusted local network only, or set it before exposing the port.
+
+The gateway (`proxy.py`):
+
+- **Routes by model name** — `resolve_target_model()` maps the request's `model` field to your config.
+- **Cold-starts on demand** — if the requested model is stopped, it launches it, waits for health (bounded by `coldStartTimeoutSeconds`), then forwards the request. A per-model lock prevents two requests from double-spawning it.
+- **Streams responses** — SSE token streaming is piped through, not buffered.
+- **Bounds payloads** — `/v1/*` request bodies over 64 MB are rejected (`413`); malformed `Content-Length` is rejected (`400`).
+
+Supported paths: `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings`, `POST /v1/tokenize`, `POST /v1/untokenize`, `POST /v1/pass-through` (and the `/v1`-less forms for completions/embeddings).
+
+The gateway works on top of whichever port model you choose above — it does **not** force everything through `masterPort`.
+
+---
+
 ## API Endpoints
+
+### OpenAI Gateway
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| **GET** | `/v1/models` | List models (OpenAI shape) |
+| **POST** | `/v1/chat/completions` | Chat completion (auto-starts model, streams SSE) |
+| **POST** | `/v1/completions` | Text completion |
+| **POST** | `/v1/embeddings` | Embeddings |
+| **POST** | `/v1/tokenize` / `/v1/untokenize` | Tokenize / untokenize |
+| **POST** | `/v1/pass-through` | Forward raw request upstream |
+
+> All `/v1/*` requests are handled by the gateway (see [Unified OpenAI Gateway](#unified-openai-gateway)). `GET /models` is a legacy alias of `/v1/models`.
+
+### Management
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | **GET** | `/` | Web UI dashboard |
-| **GET** | `/api/status` | System status + running models |
+| **GET** | `/api/health` | Liveness check (`ok` / `starting`) |
+| **GET** | `/api/status` | System status + running models + host stats |
+| **GET** | `/api/active` | Only running models, with effective port + endpoint |
 | **GET** | `/api/config` | Current configuration + runtime env |
 | **POST** | `/api/config` | Update mode (`single_port` / `multi_port`) |
-| **GET** | `/api/models` | List all configured models |
-| **PATCH** | `/api/models` | Update model runtime parameters |
-| **POST** | `/api/start` | Start a model |
-| **POST** | `/api/stop` | Stop a model |
-| **POST** | `/api/stop_all` | Stop all running models |
-| **POST** | `/api/restart` | Restart the server (cross-platform) |
-| **GET** | `/api/logs?model=ID` | Streaming logs for a model |
-| **GET** | `/api/gpu` | GPU memory, temperature, utilization |
+| **GET** | `/api/devices` | Available inference devices (CUDA / ROCm / CPU) |
+| **GET** | `/api/gpu` | GPU memory, temperature, utilization, power |
 | **GET** | `/api/mcp` | MCP server status |
 | **POST** | `/api/mcp` | Start/stop MCP server |
+| **GET** | `/api/logs?model=ID&lines=N` | Last N log lines for a model |
+| **GET** | `/api/files` | List model files (`.gguf` / `.bin` / `.safetensors`) in `dataDir` |
+| **POST** | `/api/restart` | Restart the server (cross-platform) |
+| **GET** | `/api/pin` | PIN status |
+| **POST** | `/api/pin` | Create / verify PIN |
+| **POST** | `/api/admin/reset-pin` | Reset the admin PIN |
+
+### Models
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| **GET** | `/api/models` | List all configured models |
+| **POST** | `/api/models` | Create a model |
+| **PATCH** | `/api/models` | Update runtime parameters (`{model, updates}`) |
+| **PUT** | `/api/models/{modelId}` | Replace a model's config |
+| **DELETE** | `/api/models?model=ID` | Delete a model |
+| **GET** | `/api/models/export` | Export model configs |
+| **GET** | `/api/models/import` | Import model configs |
+| **POST** | `/api/start` | Start a model |
+| **POST** | `/api/stop` | Stop a model |
+| **POST** | `/api/start_all` | Start all models |
+| **POST** | `/api/stop_all` | Stop all running models |
+
+### Hugging Face Hub & VRAM
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| **GET** | `/api/hub/search?q=...&limit=N` | Search the HF hub for GGUF repos |
+| **GET** | `/api/hub/files?repo=owner/name` | List `.gguf` / `.mmproj` files in a repo |
+| **GET** | `/api/hub/downloads` | In-flight / recent download tasks |
+| **GET** | `/api/vram/estimate?model=ID&ctx=N&ngl=N` | VRAM footprint breakdown + recommended layers |
 
 ---
 
@@ -698,6 +816,7 @@ def api_foo(self):
 ## Changelog
 
 ### Latest
+- **Documentation**: Added **Port Assignment** section (mode × `dedicated` → port), **Unified OpenAI Gateway** section, expanded config/model-entry tables (`dedicated`, `binaryPath`, `kvQuant`, `flashAttention`, `draftModel`, `draftGpuLayers`, `openAiApiKey`, idle/spawn keys), and the full API endpoint list (`/api/active`, `/api/hub/*`, `/api/vram/estimate`, `/v1/*`)
 - **Installer improvements**: Directory-based model path input (instead of single file), GGUF scanner
 - **Dependency management**: All installers now install `flask>=3.0.0`, `requests>=2.28.0`, `psutil>=5.9.0` with pinned versions
 - **File renaming**: Clear platform-specific naming (`install_linux_mac.sh`, `install_windows_gui.ps1`, `install_windows.bat`)

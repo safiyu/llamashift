@@ -255,6 +255,7 @@ _TELEMETRY_INTERVAL = 2.0
 
 async def _ws_broadcast(data: dict):
     """Broadcast telemetry data to all connected WebSocket clients."""
+    global _ws_clients
     if not _ws_clients:
         return
     message = json.dumps(data)
@@ -295,7 +296,7 @@ def _get_status_snapshot() -> dict:
         is_running = False
         pid = None
 
-        if mode == "single_port":
+        if mode == "single_port" and not config.get("dedicated"):
             master_port = _CONFIG.get("masterPort", 9000)
             current_pid = running.get(master_port, {}).get("pid")
             
@@ -388,9 +389,11 @@ _models_lock = threading.Lock()
 
 def get_models():
     """Return the models dict from config, with logPath derived at runtime."""
-    global _models_cache
+    global _models_cache, _CONFIG
     with _models_lock:
         if _models_cache is None:
+            if _CONFIG is None:
+                _CONFIG = load_config()
             raw = _CONFIG.get("models", {})
             cache = {}
             for mid, cfg in raw.items():
@@ -408,10 +411,18 @@ class _ModelsProxy:
         return get_models()[key]
     def __contains__(self, key):
         return key in get_models()
+    def __iter__(self):
+        return iter(get_models())
+    def __len__(self):
+        return len(get_models())
+    def get(self, key, default=None):
+        return get_models().get(key, default)
     def items(self):
         return get_models().items()
     def keys(self):
         return get_models().keys()
+    def values(self):
+        return get_models().values()
 
 MODELS = _ModelsProxy()
 
@@ -432,6 +443,47 @@ def save_mode(mode):
     save_config(_CONFIG)
     with _models_lock:
         _models_cache = None  # invalidate cache
+
+
+# ─── Config File Watcher ──────────────────────────────────────────────────
+_config_mtime = 0.0
+_config_watcher_thread = None
+_config_watcher_stop = threading.Event()
+CONFIG_WATCH_INTERVAL = 3.0  # seconds between polls
+
+def _config_watcher_loop():
+    """Background thread that watches config.json for changes and auto-reloads."""
+    global _config_mtime
+    while not _config_watcher_stop.is_set():
+        try:
+            if os.path.exists(CONFIG_FILE):
+                current_mtime = os.path.getmtime(CONFIG_FILE)
+                if current_mtime != _config_mtime:
+                    _config_mtime = current_mtime
+                    print(f"[config] File changed — auto-reloading config...")
+                    try:
+                        reload_config()
+                    except Exception as e:
+                        print(f"[config] Auto-reload failed: {e}")
+        except Exception as e:
+            print(f"[config] Watcher error: {e}")
+        _config_watcher_stop.wait(CONFIG_WATCH_INTERVAL)
+
+def start_config_watcher():
+    """Start the background config file watcher thread."""
+    global _config_watcher_thread, _config_mtime
+    if _config_watcher_thread is not None and _config_watcher_thread.is_alive():
+        return
+    if os.path.exists(CONFIG_FILE):
+        _config_mtime = os.path.getmtime(CONFIG_FILE)
+    _config_watcher_stop.clear()
+    _config_watcher_thread = threading.Thread(
+        target=_config_watcher_loop, daemon=True, name="config-watcher"
+    )
+    _config_watcher_thread.start()
+    print(f"[config] Auto-reload watcher started (polling every {CONFIG_WATCH_INTERVAL}s)")
+
+start_config_watcher()
 
 
 # ─── Cross-Platform Process Detection ──────────────────────────────────────
@@ -505,6 +557,22 @@ def get_running_servers():
                     except ValueError:
                         pass
     return running
+
+
+def get_process_env(binary_path):
+    """Return an execution environment with appropriate LD_LIBRARY_PATH for the given binary.
+
+    Prevents dynamic library collisions between ROCm and CUDA builds of llama-server.
+    """
+    proc_env = dict(os.environ)
+    if not binary_path:
+        return proc_env
+    bin_dir = os.path.dirname(os.path.abspath(binary_path))
+    old_ld = proc_env.get("LD_LIBRARY_PATH", "")
+    # Strip any competing llama.cpp build dirs so ROCm and CUDA builds don't cross-link
+    ld_parts = [p for p in old_ld.split(":") if p and not ("llama.cpp" in p and p != bin_dir)]
+    proc_env["LD_LIBRARY_PATH"] = ":".join([bin_dir] + ld_parts)
+    return proc_env
 
 
 # ─── Cross-Platform Process Stats ──────────────────────────────────────────
@@ -775,6 +843,68 @@ def get_host_stats():
     }
 
 
+_nvml_lib = None
+_nvml_initialized = False
+
+
+def _get_nvidia_power_fallback():
+    """Fallback power reader for NVIDIA GPUs when power.draw reports N/A (e.g. RTX 40-series)."""
+    global _nvml_lib, _nvml_initialized
+    try:
+        import ctypes
+        import ctypes.util
+        if _nvml_lib is None:
+            lib_name = ctypes.util.find_library('nvidia-ml') or 'libnvidia-ml.so.1' or 'libnvidia-ml.so'
+            if lib_name:
+                _nvml_lib = ctypes.CDLL(lib_name)
+        if _nvml_lib:
+            if not _nvml_initialized:
+                if _nvml_lib.nvmlInit() == 0:
+                    _nvml_initialized = True
+            if _nvml_initialized:
+                dev = ctypes.c_void_p()
+                if _nvml_lib.nvmlDeviceGetHandleByIndex(0, ctypes.byref(dev)) == 0:
+                    p_mw = ctypes.c_uint()
+                    if _nvml_lib.nvmlDeviceGetPowerUsage(dev, ctypes.byref(p_mw)) == 0 and p_mw.value > 0:
+                        return round(p_mw.value / 1000.0, 1)
+
+                    class _NvmlVal(ctypes.Union):
+                        _fields_ = [
+                            ('dVal', ctypes.c_double),
+                            ('uiVal', ctypes.c_uint),
+                            ('ulVal', ctypes.c_ulong),
+                            ('ullVal', ctypes.c_ulonglong),
+                            ('sval', ctypes.c_char * 8),
+                        ]
+                    class _NvmlSample(ctypes.Structure):
+                        _fields_ = [
+                            ('timeStamp', ctypes.c_ulonglong),
+                            ('sampleValue', _NvmlVal)
+                        ]
+                    cnt = ctypes.c_uint(5)
+                    samples = (_NvmlSample * 5)()
+                    stype = ctypes.c_uint()
+                    if _nvml_lib.nvmlDeviceGetSamples(dev, 0, 0, ctypes.byref(stype), ctypes.byref(cnt), samples) == 0 and cnt.value > 0:
+                        latest = samples[cnt.value - 1]
+                        if stype.value == 1 and latest.sampleValue.uiVal > 0:
+                            return round(latest.sampleValue.uiVal / 1000.0, 1)
+                        elif stype.value == 0 and latest.sampleValue.dVal > 0:
+                            return round(latest.sampleValue.dVal, 1)
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run(['nvidia-smi', '-q', '-d', 'POWER'], capture_output=True, text=True, timeout=3)
+        if res.returncode == 0 and res.stdout:
+            m = re.search(r'Power Samples.*?Avg\s*:\s*([\d\.]+)\s*W', res.stdout, re.DOTALL)
+            if m:
+                return float(m.group(1))
+    except Exception:
+        pass
+
+    return 0.0
+
+
 def get_gpu_telemetry():
     """Gathers real-time GPU statistics for NVIDIA and AMD."""
     nvidia_data = None
@@ -789,15 +919,18 @@ def get_gpu_telemetry():
         ], capture_output=True, text=True, timeout=10)
         if res.returncode == 0 and res.stdout.strip():
             parts = [p.strip() for p in res.stdout.splitlines()[0].split(",")]
-            if len(parts) >= 6:
-                power_str = parts[5]
+            if len(parts) >= 5:
                 power_val = 0.0
-                if not power_str.startswith("[") and "N/A" not in power_str:
-                    try:
-                        power_val = float(power_str)
-                    except ValueError:
-                        pass
-                
+                if len(parts) >= 6:
+                    power_str = parts[5]
+                    if not power_str.startswith("[") and "N/A" not in power_str:
+                        try:
+                            power_val = float(power_str)
+                        except ValueError:
+                            pass
+                if power_val <= 0.0:
+                    power_val = _get_nvidia_power_fallback()
+
                 nvidia_data = {
                     "name": parts[0],
                     "temp": float(parts[1]),
@@ -1444,6 +1577,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/health":
             self.handle_api_health()
+        elif path == "/api/active":
+            self.handle_api_active()
         elif path == "/api/status":
             self.handle_api_status()
         elif path == "/api/gpu":
@@ -1524,6 +1659,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             "name", "desc", "filename", "port", "ctxSize", "nParallel",
             "nGpuLayers", "batchSize", "threads", "temperature",
             "maxTokens", "topP", "devices", "extraArgs", "mmproj",
+            "binaryPath", "gpu", "dedicated",
         }
         
         for key, value in data.items():
@@ -1543,7 +1679,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                     return
         
         runtime_params = {"ctxSize", "nParallel", "nGpuLayers", "batchSize", "threads",
-                          "extraArgs", "devices", "mmproj", "port", "filename"}
+                          "extraArgs", "devices", "mmproj", "port", "filename", "binaryPath"}
         requires_restart = bool(runtime_params & set(updates.keys()))
         
         was_running = False
@@ -1638,7 +1774,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                         finally:
                             _sock.close()
                     
-                    binary_path = _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
+                    binary_path = new_model_cfg.get("binaryPath") or _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
                     data_dir = _CONFIG.get("dataDir", "~/models")
                     model_path = os.path.join(os.path.expanduser(data_dir), new_model_cfg["filename"])
                     
@@ -1672,6 +1808,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                     proc_kwargs = {
                         "stdout": log_file,
                         "stderr": subprocess.STDOUT,
+                        "env": get_process_env(binary_path),
                     }
                     if not IS_WINDOWS:
                         proc_kwargs["start_new_session"] = True
@@ -1840,6 +1977,75 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 "message": f"Mode switched from {old_mode} to {new_mode}"
             })
 
+    def handle_api_active(self):
+        """GET /api/active - return only currently running models with their endpoints.
+
+        Designed for external apps (e.g. IDE extensions, scripts, companion UIs) to
+        discover which models are live and which endpoint to route requests to.
+
+        Response shape:
+        {
+            "active": [
+                {
+                    "id": "qwen36",
+                    "name": "Qwen 3.6 35B A3B Vision",
+                    "gpu": "AMD R9700",
+                    "port": 9000,
+                    "endpoint": "http://localhost:9000/v1",
+                    "dedicated": false,
+                    "pid": 13427,
+                    "uptime": "00:05"
+                },
+                ...
+            ]
+        }
+        """
+        mode = get_global_mode()
+        _cleanup_stale_tracked_processes()
+        running = get_running_servers()
+
+        active = []
+        for model_id, config in MODELS.items():
+            port = config["port"]
+            is_running = False
+            pid = None
+
+            if mode == "single_port" and not config.get("dedicated"):
+                master_port = _CONFIG.get("masterPort", 9000)
+                current_pid = running.get(master_port, {}).get("pid")
+                if current_pid:
+                    cmdline = get_process_cmdline(current_pid)
+                    filename = config.get("filename", "")
+                    if filename and filename in cmdline:
+                        is_running = True
+                        pid = current_pid
+            else:
+                if port in running:
+                    candidate_pid = running[port]["pid"]
+                    cmdline = get_process_cmdline(candidate_pid)
+                    is_running = _process_matches_model(cmdline, config, model_id)
+                    pid = candidate_pid if is_running else None
+
+            if not is_running:
+                continue
+
+            stats = get_process_stats(pid)
+            active.append({
+                "id":        model_id,
+                "name":      config.get("name", model_id),
+                "gpu":       config.get("gpu", ""),
+                "devices":   config.get("devices", []),
+                "port":      port,
+                "endpoint":  config.get("endpoint", f"http://localhost:{port}/v1"),
+                "dedicated": config.get("dedicated", False),
+                "pid":       pid,
+                "cpu":       stats["cpu"],
+                "memory":    stats["mem"],
+                "uptime":    stats["uptime"],
+            })
+
+        self.send_json_response({"active": active})
+
     def handle_api_status(self):
         mode = get_global_mode()
 
@@ -1856,7 +2062,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             is_running = False
             pid = None
 
-            if mode == "single_port":
+            if mode == "single_port" and not config.get("dedicated"):
                 master_port = _CONFIG.get("masterPort", 9000)
                 current_pid = running.get(master_port, {}).get("pid")
                 
@@ -2004,30 +2210,54 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         if mode == "single_port":
             master_port = _CONFIG.get("masterPort", 9000)
+            is_dedicated = target_model.get("dedicated", False)
+            target_port = target_model.get("port", master_port) if is_dedicated else master_port
             
-            # Step 1: Kill any existing llama-server process regardless of which model spawned it
             _cleanup_stale_tracked_processes()
             running = get_running_servers()
             
-            # Step 1: Kill ALL running llama-server processes regardless of port
-            # In single-port mode, only ONE model should ever run at a time,
-            # even if models are configured on different ports or devices
-            for _port, _info in list(running.items()):
-                existing_pid = _info["pid"]
-                if kill_process(existing_pid):
-                    with _proc_lock:
-                        for mid, p in list(_model_processes.items()):
-                            try:
-                                if p.pid == existing_pid:
-                                    if mid not in stopped_some:
-                                        stopped_some.append(mid)
-                                    _model_processes.pop(mid, None)
-                            except:
-                                pass
+            if is_dedicated:
+                # Dedicated model (e.g. secondary GPU): only stop process on target_port
+                if target_port in running:
+                    existing_pid = running[target_port]["pid"]
+                    if kill_process(existing_pid):
+                        with _proc_lock:
+                            for mid, p in list(_model_processes.items()):
+                                try:
+                                    if p.pid == existing_pid:
+                                        if mid not in stopped_some:
+                                            stopped_some.append(mid)
+                                        _model_processes.pop(mid, None)
+                                except:
+                                    pass
+                ports_to_wait = [target_port]
+            else:
+                # Switched model on master_port:
+                # Stop processes on master_port or other non-dedicated models, preserving dedicated models
+                for _port, _info in list(running.items()):
+                    is_other_dedicated = False
+                    for mid, mcfg in MODELS.items():
+                        if mcfg.get("dedicated") and mcfg.get("port") == _port:
+                            is_other_dedicated = True
+                            break
+                    if is_other_dedicated:
+                        continue  # preserve dedicated models on other GPUs
+                    
+                    existing_pid = _info["pid"]
+                    if kill_process(existing_pid):
+                        with _proc_lock:
+                            for mid, p in list(_model_processes.items()):
+                                try:
+                                    if p.pid == existing_pid:
+                                        if mid not in stopped_some:
+                                            stopped_some.append(mid)
+                                        _model_processes.pop(mid, None)
+                                except:
+                                    pass
+                ports_to_wait = [p for p in running.keys() if not any(m.get("dedicated") and m.get("port") == p for m in MODELS.values())]
             
-            # Step 2: Wait for all ports to be fully released
+            # Step 2: Wait for ports to be fully released
             import socket
-            ports_to_wait = list(running.keys())
             if ports_to_wait:
                 for _wait_attempt in range(40):  # Up to 20 seconds
                     time.sleep(0.5)
@@ -2044,18 +2274,23 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                     if all_free:
                         break
             
-            # Step 3: Clean up _model_processes and _log_handles completely
-            with _proc_lock:
-                _model_processes.clear()
-            with _log_lock:
-                for handle in _log_handles.values():
-                    try:
-                        handle.close()
-                    except OSError:
-                        pass
-                _log_handles.clear()
+            # Step 3: Clean up stopped model tracking
+            if not is_dedicated:
+                with _proc_lock:
+                    for mid in list(_model_processes.keys()):
+                        if not MODELS.get(mid, {}).get("dedicated"):
+                            _model_processes.pop(mid, None)
+                with _log_lock:
+                    for mid in list(_log_handles.keys()):
+                        if not MODELS.get(mid, {}).get("dedicated"):
+                            handle = _log_handles.pop(mid, None)
+                            if handle:
+                                try:
+                                    handle.close()
+                                except OSError:
+                                    pass
 
-            port = master_port
+            port = target_port
         else:
             # Multi-port mode: allow multiple models simultaneously.
             # Only stop another model if it is on the SAME port (should not happen),
@@ -2091,7 +2326,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 print(f"[start] Port {port} still in use after 10s, proceeding anyway")
 
         # Build command
-        binary_path = _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
+        binary_path = target_model.get("binaryPath") or _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
         data_dir = _CONFIG.get("dataDir", "~/models")
         model_path = os.path.join(os.path.expanduser(data_dir), target_model["filename"])
 
@@ -2151,6 +2386,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             proc_kwargs = {
                 "stdout": log_file,
                 "stderr": subprocess.STDOUT,
+                "env": get_process_env(binary_path),
             }
             if not IS_WINDOWS:
                 proc_kwargs["start_new_session"] = True
@@ -2206,10 +2442,22 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         running = get_running_servers()
 
         if mode == "single_port":
-            if not running:
-                self.send_json_response({"success": True, "message": "No model is currently running."})
-                return
-            pid = list(running.values())[0]["pid"]
+            if target_model.get("dedicated"):
+                port = target_model.get("port", 9000)
+                if port not in running:
+                    self.send_json_response({"success": True, "message": f"Model {model_id} was already stopped."})
+                    return
+                pid = running[port]["pid"]
+            else:
+                master_port = _CONFIG.get("masterPort", 9000)
+                if master_port in running:
+                    pid = running[master_port]["pid"]
+                else:
+                    non_ded_pids = [info["pid"] for p, info in running.items() if not any(m.get("dedicated") and m.get("port") == p for m in MODELS.values())]
+                    if not non_ded_pids:
+                        self.send_json_response({"success": True, "message": "No switched model is currently running."})
+                        return
+                    pid = non_ded_pids[0]
         else:
             port = target_model["port"]
             if port not in running:
@@ -2321,7 +2569,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             
             try:
                 # Reuse the same logic as handle_api_start but in a loop
-                binary_path = _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
+                binary_path = config.get("binaryPath") or _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
                 data_dir = _CONFIG.get("dataDir", "~/models")
                 model_path = os.path.join(os.path.expanduser(data_dir), config["filename"])
                 
@@ -2361,6 +2609,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 proc_kwargs = {
                     "stdout": log_file,
                     "stderr": subprocess.STDOUT,
+                    "env": get_process_env(binary_path),
                 }
                 if not IS_WINDOWS:
                     proc_kwargs["start_new_session"] = True
@@ -2440,6 +2689,15 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         # Optional mmproj
         if data.get("mmproj"):
             new_model["mmproj"] = data["mmproj"]
+
+        if data.get("binaryPath"):
+            new_model["binaryPath"] = data["binaryPath"]
+        if data.get("gpu"):
+            new_model["gpu"] = data["gpu"]
+        if data.get("size"):
+            new_model["size"] = data["size"]
+        if data.get("dedicated") is not None:
+            new_model["dedicated"] = bool(data["dedicated"])
 
         with _models_lock:
             _CONFIG["models"][model_id] = new_model
@@ -2846,6 +3104,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             "ctxSize", "nParallel", "nGpuLayers", "temperature",
             "maxTokens", "topP", "batchSize", "threads", "extraArgs",
             "name", "desc", "devices", "mmproj", "port",
+            "binaryPath", "gpu", "dedicated",
         }
         filtered = {k: v for k, v in updates.items() if k in allowed}
         if not filtered:
@@ -2854,7 +3113,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         # Determine if this requires a restart (runtime-affecting params)
         runtime_params = {"ctxSize", "nParallel", "nGpuLayers", "batchSize", "threads",
-                          "extraArgs", "devices", "mmproj", "port", "filename"}
+                          "extraArgs", "devices", "mmproj", "port", "filename", "binaryPath"}
         requires_restart = bool(runtime_params & set(filtered.keys()))
 
         # Check if model is currently running BEFORE updating config
@@ -2956,7 +3215,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                         print(f"[patch_restart] Port {port} still in use after 10s, proceeding anyway")
 
                     # Start the model with new config
-                    binary_path = _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
+                    binary_path = new_model_cfg.get("binaryPath") or _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
                     data_dir = _CONFIG.get("dataDir", "~/models")
                     model_path = os.path.join(os.path.expanduser(data_dir), new_model_cfg["filename"])
 
@@ -2990,6 +3249,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                     proc_kwargs = {
                         "stdout": log_file,
                         "stderr": subprocess.STDOUT,
+                        "env": get_process_env(binary_path),
                     }
                     if not IS_WINDOWS:
                         proc_kwargs["start_new_session"] = True

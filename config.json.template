@@ -6,6 +6,9 @@
     "dataDir": "~/models",
     "mode": "single_port",
     "serverPort": 8002,
+    "idleTimeoutMinutes": 15,
+    "autoSpawnEnabled": true,
+    "coldStartTimeoutSeconds": 120,
     "models": {
         "example_model": {
             "id": "example_model",
@@ -16,6 +19,8 @@
             "devices": [
                 "ROCm0"
             ],
+            "binaryPath": "/path/to/llama-server",
+            "dedicated": false,
             "filename": "model-filename.gguf",
             "port": 9000,
             "ctxSize": 16384,

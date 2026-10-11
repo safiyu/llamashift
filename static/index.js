@@ -310,26 +310,53 @@ function showConfirmModal(message, onConfirm, onCancel) {
  * Handle creating a new model
  */
 async function handleCreateModel() {
-    const modelNameInput = document.getElementById('new-model-name');
-    const modelTypeSelect = document.getElementById('new-model-type');
-    const modelSizeInput = document.getElementById('new-model-size');
+    const idInput = document.getElementById('new-model-id');
+    const nameInput = document.getElementById('new-model-name');
+    const descInput = document.getElementById('new-model-desc');
+    const filenameInput = document.getElementById('new-model-filename');
+    const portInput = document.getElementById('new-model-port');
+    const ctxSizeInput = document.getElementById('new-model-ctxSize');
+    const nParallelInput = document.getElementById('new-model-nParallel');
+    const nGpuLayersInput = document.getElementById('new-model-nGpuLayers');
+    const batchSizeInput = document.getElementById('new-model-batchSize');
+    const deviceSelect = document.getElementById('new-model-device');
+    const binaryPathInput = document.getElementById('new-model-binaryPath');
+    const dedicatedInput = document.getElementById('new-model-dedicated');
 
-    if (!modelNameInput || !modelTypeSelect || !modelSizeInput) return;
+    const id = idInput ? idInput.value.trim() : '';
+    const name = nameInput ? nameInput.value.trim() : '';
+    const filename = filenameInput ? filenameInput.value.trim() : '';
 
-    const name = modelNameInput.value.trim();
-    const type = modelTypeSelect.value;
-    const size = modelSizeInput.value.trim();
-
-    if (!name || !size) {
-        showToast('Please fill in all required fields', 'error');
+    if (!id || !name || !filename) {
+        showToast('Please fill in Model ID, Name, and Filename', 'error');
         return;
+    }
+
+    const payload = {
+        id,
+        name,
+        desc: descInput ? descInput.value.trim() : '',
+        filename,
+        port: portInput ? parseInt(portInput.value) || 9000 : 9000,
+        ctxSize: ctxSizeInput ? parseInt(ctxSizeInput.value) || 16384 : 16384,
+        nParallel: nParallelInput ? parseInt(nParallelInput.value) || 1 : 1,
+        nGpuLayers: nGpuLayersInput ? parseInt(nGpuLayersInput.value) || 99 : 99,
+        batchSize: batchSizeInput ? parseInt(batchSizeInput.value) || 2048 : 2048,
+        devices: deviceSelect ? Array.from(deviceSelect.selectedOptions).map(o => o.value) : ['ROCm0']
+    };
+
+    if (binaryPathInput && binaryPathInput.value.trim()) {
+        payload.binaryPath = binaryPathInput.value.trim();
+    }
+    if (dedicatedInput) {
+        payload.dedicated = dedicatedInput.checked;
     }
 
     try {
         const response = await fetch('/api/models', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, type, size })
+            body: JSON.stringify(payload)
         });
 
         const result = await response.json();
@@ -337,8 +364,12 @@ async function handleCreateModel() {
         if (result.success) {
             showToast('Model created successfully!', 'success');
             closeModal('new-model-overlay');
-            modelNameInput.value = '';
-            modelSizeInput.value = '';
+            if (idInput) idInput.value = '';
+            if (nameInput) nameInput.value = '';
+            if (descInput) descInput.value = '';
+            if (filenameInput) filenameInput.value = '';
+            if (binaryPathInput) binaryPathInput.value = '';
+            if (dedicatedInput) dedicatedInput.checked = false;
             await fetchSystemState(true);
         } else {
             showToast(result.message || 'Failed to create model', 'error');
@@ -543,6 +574,10 @@ async function openModelEditConfig(modelId) {
     document.getElementById('config-maxTokens').value = model.maxTokens || 4096;
     document.getElementById('config-topP').value = model.topP || 0.9;
     document.getElementById('config-extraArgs').value = (model.extraArgs || []).join(' ');
+    const binInput = document.getElementById('config-binaryPath');
+    if (binInput) binInput.value = model.binaryPath || '';
+    const dedInput = document.getElementById('config-dedicated');
+    if (dedInput) dedInput.checked = !!model.dedicated;
 
     // Set device selections
     const deviceSelect = document.getElementById('config-device');
@@ -582,6 +617,15 @@ async function handleSaveConfig() {
         topP: parseFloat(document.getElementById('config-topP').value) || 0.9,
         extraArgs: document.getElementById('config-extraArgs').value.split(' ').filter(Boolean)
     };
+
+    const binInput = document.getElementById('config-binaryPath');
+    if (binInput && binInput.value.trim()) {
+        configData.binaryPath = binInput.value.trim();
+    }
+    const dedInput = document.getElementById('config-dedicated');
+    if (dedInput) {
+        configData.dedicated = dedInput.checked;
+    }
 
     // Get selected devices
     const deviceSelect = document.getElementById('config-device');
@@ -633,6 +677,11 @@ async function handleResetConfig() {
     document.getElementById('config-maxTokens').value = model.maxTokens || 4096;
     document.getElementById('config-topP').value = model.topP || 0.9;
     document.getElementById('config-extraArgs').value = (model.extraArgs || []).join(' ');
+
+    const binInputReset = document.getElementById('config-binaryPath');
+    if (binInputReset) binInputReset.value = model.binaryPath || '';
+    const dedInputReset = document.getElementById('config-dedicated');
+    if (dedInputReset) dedInputReset.checked = !!model.dedicated;
 
     const deviceSelect = document.getElementById('config-device');
     if (deviceSelect && model.devices) {
@@ -799,10 +848,9 @@ function updateCpuTile(host) {
         const loadPct = Math.min(100, (load / cpuCount) * 100);
         cpuValue.textContent = loadPct.toFixed(0);
 
-        // Update gauge ring rotation (0-270deg mapped from 0-100%)
+        // Update gauge arc (--pct 0-100 drives the 270° SVG arc length)
         if (cpuGaugeProgress) {
-            const rotation = (loadPct / 100) * 270;
-            cpuGaugeProgress.style.transform = `rotate(${rotation}deg)`;
+            cpuGaugeProgress.style.setProperty('--pct', loadPct);
         }
     }
 
@@ -851,10 +899,9 @@ function updateRamTile(host) {
     // Gauge value (percentage)
     if (ramValue) ramValue.textContent = memPct.toFixed(1);
 
-    // Gauge ring rotation (0-270deg mapped from 0-100%)
+    // Gauge arc (--pct 0-100 drives the 270° SVG arc length)
     if (ramGaugeProgress) {
-        const rotation = (memPct / 100) * 270;
-        ramGaugeProgress.style.transform = `rotate(${rotation}deg)`;
+        ramGaugeProgress.style.setProperty('--pct', memPct);
     }
 
     // Used bar
@@ -971,7 +1018,7 @@ function updateSingleGpuTile(tile, gpu) {
         <div class="tile-body">
             <div class="circular-gauge">
                 <div class="gauge-ring"></div>
-                <div class="gauge-ring-progress" style="transform: rotate(${(util / 100) * 270}deg);"></div>
+                <div class="gauge-ring-progress" style="--pct: ${Math.min(100, Math.max(0, util))}"><svg viewBox="0 0 100 100" aria-hidden="true"><path d="M 21.716 78.284 A 40 40 0 1 1 78.284 78.284" pathLength="100"></path></svg></div>
                 <div class="gauge-center">
                     <span class="gauge-value">${util.toFixed(0)}</span>
                     <span class="gauge-unit">UTIL</span>
@@ -1233,19 +1280,37 @@ async function toggleModel(modelId) {
     const model = appState.models.find(m => m.id === modelId);
     if (!model) return;
 
-    // Single port mode: check if another model is running and show confirmation modal
-    const isSinglePort = appState.serverMode === 'single_port';
-    const anyRunning = appState.models.some(m => m.status === 'running');
+    // Check if another model conflicts and show confirmation modal
+    if (model.status === 'stopped') {
+        const isSinglePort = appState.serverMode === 'single_port';
+        let conflictingModel = null;
 
-    if (model.status === 'stopped' && isSinglePort && anyRunning) {
-        const runningModel = appState.models.find(m => m.status === 'running');
-        const confirmMessage = document.getElementById('single-port-confirm-message');
-        if (confirmMessage) {
-            confirmMessage.innerHTML = `Starting <strong>${escapeHtml(model.name)}</strong> will stop the currently running model <strong>${escapeHtml(runningModel.name)}</strong>. Continue?`;
+        if (model.dedicated) {
+            // Dedicated model on separate port: only conflicts if another model runs on that exact port
+            conflictingModel = appState.models.find(m => 
+                m.id !== modelId && m.status === 'running' && m.port === model.port
+            );
+        } else if (isSinglePort) {
+            // Switched model in single-port mode: only conflicts with other non-dedicated running models
+            conflictingModel = appState.models.find(m => 
+                m.id !== modelId && m.status === 'running' && !m.dedicated
+            );
+        } else {
+            // Multi-port mode: only conflicts if another model uses the same port
+            conflictingModel = appState.models.find(m => 
+                m.id !== modelId && m.status === 'running' && m.port === model.port
+            );
         }
-        pendingModelId = modelId;
-        openModal('single-port-confirm-overlay');
-        return;
+
+        if (conflictingModel) {
+            const confirmMessage = document.getElementById('single-port-confirm-message');
+            if (confirmMessage) {
+                confirmMessage.innerHTML = `Starting <strong>${escapeHtml(model.name)}</strong> will stop the currently running model <strong>${escapeHtml(conflictingModel.name)}</strong>. Continue?`;
+            }
+            pendingModelId = modelId;
+            openModal('single-port-confirm-overlay');
+            return;
+        }
     }
 
     // Direct toggle (no confirmation needed)

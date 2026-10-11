@@ -93,7 +93,7 @@
                     <div class="tile-body">
                         <div class="circular-gauge">
                             <div class="gauge-ring"></div>
-                            <div class="gauge-ring-progress" id="cpu-gauge-progress" style="transform: rotate(0deg);"></div>
+                            <div class="gauge-ring-progress" id="cpu-gauge-progress" style="--pct: 0;"><svg viewBox="0 0 100 100" aria-hidden="true"><path d="M 21.716 78.284 A 40 40 0 1 1 78.284 78.284" pathLength="100"></path></svg></div>
                             <div class="gauge-center">
                                 <span class="gauge-value" id="cpu-value">0.0</span>
                                 <span class="gauge-unit">%</span>
@@ -129,7 +129,7 @@
                     <div class="tile-body">
                         <div class="circular-gauge">
                             <div class="gauge-ring"></div>
-                            <div class="gauge-ring-progress" id="ram-gauge-progress" style="transform: rotate(0deg);"></div>
+                            <div class="gauge-ring-progress" id="ram-gauge-progress" style="--pct: 0;"><svg viewBox="0 0 100 100" aria-hidden="true"><path d="M 21.716 78.284 A 40 40 0 1 1 78.284 78.284" pathLength="100"></path></svg></div>
                             <div class="gauge-center">
                                 <span class="gauge-value" id="ram-value">0.0</span>
                                 <span class="gauge-unit">%</span>
@@ -359,6 +359,23 @@
                         <input type="text" id="config-extraArgs" placeholder="--flash-attn --mlock ...">
                     </div>
                 </div>
+
+                <!-- Custom Binary Path & Dedicated Mode -->
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-microchip"></i> Engine & Hardware Coexistence
+                    </div>
+                    <div class="config-field">
+                        <label>Custom Binary Path (optional override)</label>
+                        <input type="text" id="config-binaryPath" placeholder="Leave empty for default ~/llama.cpp/build/bin/llama-server">
+                    </div>
+                    <div class="config-field" style="margin-top: 8px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" id="config-dedicated" style="width: auto;">
+                            <span>Dedicated Model (Preserve on secondary GPU during single-port switches)</span>
+                        </label>
+                    </div>
+                </div>
             </div>
             <div class="config-modal-footer">
                 <button id="btn-reset-config" class="btn btn-secondary">
@@ -519,6 +536,23 @@
                             <option value="Metal0">Metal0 (Apple Metal)</option>
                         </select>
                         <small style="color: var(--text-secondary); margin-top: 4px; display: block;">Hold Ctrl/Cmd to select multiple devices</small>
+                    </div>
+                </div>
+
+                <!-- Custom Binary Path & Dedicated Mode -->
+                <div class="config-section">
+                    <div class="config-section-title">
+                        <i class="fa-solid fa-microchip"></i> Engine & Hardware Coexistence
+                    </div>
+                    <div class="config-field">
+                        <label>Custom Binary Path (optional override)</label>
+                        <input type="text" id="new-model-binaryPath" placeholder="Leave empty for default ~/llama.cpp/build/bin/llama-server">
+                    </div>
+                    <div class="config-field" style="margin-top: 8px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" id="new-model-dedicated" style="width: auto;">
+                            <span>Dedicated Model (Preserve on secondary GPU during single-port switches)</span>
+                        </label>
                     </div>
                 </div>
             </div>

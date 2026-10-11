@@ -4,6 +4,7 @@ API module for llama-shift server.
 Handles HTTP API endpoints for model management, configuration, and control.
 """
 
+import http.server
 import json
 import os
 import re
@@ -14,6 +15,8 @@ import threading
 import time
 import urllib.parse
 import uuid
+
+import proxy
 
 from config import (
     DEFAULT_RUNTIME_PARAMS, HAS_SYSTEMD, IS_DOCKER, IS_WINDOWS,
@@ -68,13 +71,64 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
+    # Maximum request body accepted on the /v1/* gateway path. OpenAI
+    # chat payloads are tiny; this exists purely to stop an unbounded
+    # Content-Length from exhausting gateway memory.
+    MAX_GATEWAY_BODY_BYTES = 64 * 1024 * 1024  # 64 MB
+
+    def _dispatch_gateway_proxy(self, path, query):
+        """Route /v1/* (and legacy /models) through the OpenAI proxy.
+
+        Called from BOTH do_GET and do_POST — BaseHTTPRequestHandler
+        dispatches strictly by method, so the proxy must be reachable
+        from each one. Returns True when the request was handled.
+        """
+        if not (path in ("/v1/models", "/models") or path.startswith("/v1/")):
+            return False
+
+        body = b""
+        if self.command in ("POST", "PUT", "PATCH"):
+            try:
+                content_length = int(self.headers.get("Content-Length", 0))
+            except (ValueError, TypeError):
+                self.send_error_response(400, "Invalid Content-Length header")
+                return True
+            if content_length < 0:
+                self.send_error_response(400, "Negative Content-Length header")
+                return True
+            if content_length > self.MAX_GATEWAY_BODY_BYTES:
+                self.send_error_response(
+                    413,
+                    f"Payload exceeds {self.MAX_GATEWAY_BODY_BYTES} byte limit")
+                return True
+            if content_length > 0:
+                body = self.rfile.read(content_length)
+
+        try:
+            proxy.handle_request(self, self.command, path, query, body)
+        except Exception as e:
+            # Never let a proxy failure kill the handler thread without
+            # a client-visible response.
+            print(f"[gateway] proxy error: {e}")
+            try:
+                self.send_error_response(502, f"Gateway error: {e}")
+            except Exception:
+                pass
+        return True
+
     def do_GET(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         query = urllib.parse.parse_qs(parsed_url.query)
 
+        # ── Unified OpenAI gateway: /v1/* (and legacy /models) ──
+        if self._dispatch_gateway_proxy(path, query):
+            return
+
         if path == "/api/health":
             self.handle_api_health()
+        elif path == "/api/active":
+            self.handle_api_active()
         elif path == "/api/status":
             self.handle_api_status()
         elif path == "/api/gpu":
@@ -97,6 +151,14 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             self.handle_api_mcp_status()
         elif path == "/api/files":
             self.handle_api_files()
+        elif path == "/api/hub/search":
+            self.handle_api_hub_search(query)
+        elif path == "/api/hub/files":
+            self.handle_api_hub_files(query)
+        elif path == "/api/hub/downloads":
+            self.handle_api_hub_downloads()
+        elif path == "/api/vram/estimate":
+            self.handle_api_vram_estimate(query)
         else:
             self.serve_static(path)
 
@@ -130,6 +192,12 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
+        query = urllib.parse.parse_qs(parsed_url.query)
+
+        # ── Unified OpenAI gateway: POST /v1/chat/completions, /v1/completions,
+        #    /v1/embeddings, /v1/tokenize, ... ──
+        if self._dispatch_gateway_proxy(path, query):
+            return
 
         if path in ["/api/start", "/api/stop", "/api/stop_all", "/api/start_all",
                     "/api/config", "/api/mcp", "/api/restart", "/api/pin",
@@ -241,6 +309,40 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             "--host", "0.0.0.0",
         ]
 
+        # ── KV-cache quantization (per-model kvQuant: f16 | q8_0 | q4_0) ──
+        kv_quant = (model_cfg.get("kvQuant") or "").strip().lower()
+        if kv_quant in ("q8_0", "q4_0", "q8_1", "q5_0", "q5_1", "bf16", "f16"):
+            if kv_quant != "f16":
+                cmd_args.extend([
+                    "--cache-type-k", kv_quant,
+                    "--cache-type-v", kv_quant,
+                ])
+
+        # ── Flash attention (per-model flashAttention: bool) ──
+        if model_cfg.get("flashAttention"):
+            cmd_args.extend(["--flash-attn", "on"])
+
+        # ── Speculative decoding: draft model + draft GPU layers ──
+        draft = model_cfg.get("draftModel")
+        if draft:
+            expanded_draft = os.path.expanduser(str(draft).strip())
+            if os.path.isabs(expanded_draft):
+                draft_path = expanded_draft
+            else:
+                draft_path = os.path.join(
+                    os.path.expanduser(data_dir), expanded_draft)
+            if os.path.isfile(draft_path):
+                cmd_args.extend(["--model-draft", draft_path])
+                ngld = model_cfg.get("draftGpuLayers")
+                if ngld is not None:
+                    try:
+                        cmd_args.extend(["--gpu-layers-draft", str(int(ngld))])
+                    except (TypeError, ValueError):
+                        pass
+            else:
+                print(f"[start] Warning: draft model not found at {draft_path} "
+                      f"(skipping speculative decoding)")
+
         if "mmproj" in model_cfg:
             mmproj_path = os.path.join(os.path.expanduser(data_dir), model_cfg["mmproj"])
             cmd_args.extend(["--mmproj", mmproj_path])
@@ -321,7 +423,10 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         Returns the Popen proc and log file handle on success.
         Sends an error response and returns None on failure.
         """
-        from process import _log_handles, _log_lock, _proc_lock, _active_processes_lock
+        from process import (
+            _log_handles, _log_lock, _proc_lock, _active_processes_lock,
+            get_process_env,
+        )
 
         cmd_args, model_path = self._build_cmd(
             target_model, binary_path, data_dir, port,
@@ -347,7 +452,11 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             with _log_lock:
                 _log_handles[model_id] = log_file
 
-            proc_kwargs = {"stdout": log_file, "stderr": subprocess.STDOUT}
+            proc_kwargs = {
+                "stdout": log_file,
+                "stderr": subprocess.STDOUT,
+                "env": get_process_env(binary_path),
+            }
             if not IS_WINDOWS:
                 proc_kwargs["start_new_session"] = True
 
@@ -448,8 +557,86 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 "message": f"Mode switched from {old_mode} to {new_mode}",
             })
 
+    def handle_api_active(self):
+        """GET /api/active - return only currently running models with their endpoints.
+
+        Designed for external apps (e.g. IDE extensions, scripts, companion UIs) to
+        discover which models are live and which endpoint to route requests to.
+
+        Response shape:
+        {
+            "active": [
+                {
+                    "id": "qwen36",
+                    "name": "Qwen 3.6 35B A3B Vision",
+                    "gpu": "AMD R9700",
+                    "port": 9000,
+                    "endpoint": "http://localhost:9000/v1",
+                    "dedicated": false,
+                    "pid": 13427,
+                    "uptime": "00:05"
+                },
+                ...
+            ]
+        }
+        """
+        from config import get_global_mode, MODELS, _CONFIG
+        from process import (
+            get_running_servers, get_process_stats, get_process_cmdline,
+            _process_matches_model, _cleanup_stale_tracked_processes,
+        )
+
+        mode = get_global_mode()
+        _cleanup_stale_tracked_processes()
+        running = get_running_servers()
+        master_port = _CONFIG.get("masterPort", 9000)
+
+        active = []
+        for model_id, cfg in MODELS.items():
+            is_running = False
+            pid = None
+
+            if mode == "single_port" and not cfg.get("dedicated"):
+                # Shared model: only reachable via the master port.
+                effective_port = master_port
+                current_pid = running.get(master_port, {}).get("pid")
+                if current_pid:
+                    cmdline = get_process_cmdline(current_pid)
+                    filename = cfg.get("filename", "")
+                    if filename and filename in cmdline:
+                        is_running = True
+                        pid = current_pid
+            else:
+                effective_port = cfg.get("port", master_port)
+                if effective_port in running:
+                    candidate_pid = running[effective_port]["pid"]
+                    cmdline = get_process_cmdline(candidate_pid)
+                    is_running = _process_matches_model(cmdline, cfg, model_id)
+                    pid = candidate_pid if is_running else None
+
+            if not is_running:
+                continue
+
+            stats = get_process_stats(pid)
+            active.append({
+                "id":        model_id,
+                "name":      cfg.get("name", model_id),
+                "gpu":       cfg.get("gpu", ""),
+                "devices":   cfg.get("devices", []),
+                "port":      effective_port,
+                "endpoint":  cfg.get(
+                    "endpoint", f"http://localhost:{effective_port}/v1"),
+                "dedicated": cfg.get("dedicated", False),
+                "pid":       pid,
+                "cpu":       stats["cpu"],
+                "memory":    stats["mem"],
+                "uptime":    stats["uptime"],
+            })
+
+        self.send_json_response({"active": active})
+
     def handle_api_status(self):
-        from config import get_global_mode, MODELS
+        from config import get_global_mode, MODELS, _CONFIG
         from process import (
             get_running_servers, get_host_stats, get_process_stats,
             get_process_cmdline, _process_matches_model,
@@ -467,7 +654,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             is_running = False
             pid = None
 
-            if mode == "single_port":
+            if mode == "single_port" and not cfg.get("dedicated"):
                 master_port = _CONFIG.get("masterPort", 9000)
                 current_pid = running.get(master_port, {}).get("pid")
                 if current_pid:
@@ -610,36 +797,69 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         if mode == "single_port":
             master_port = _CONFIG.get("masterPort", 9000)
+            is_dedicated = target_model.get("dedicated", False)
+            target_port = target_model.get("port", master_port) if is_dedicated else master_port
+
             _cleanup_stale_tracked_processes()
             running = self._get_running_servers()
 
-            for _port, _info in list(running.items()):
-                existing_pid = _info["pid"]
-                if kill_process(existing_pid):
-                    with _proc_lock:
-                        for mid, p in list(_model_processes.items()):
-                            try:
-                                if p.pid == existing_pid:
-                                    if mid not in stopped_some:
-                                        stopped_some.append(mid)
-                                    _model_processes.pop(mid, None)
-                            except Exception:
-                                pass
+            if is_dedicated:
+                if target_port in running:
+                    existing_pid = running[target_port]["pid"]
+                    if kill_process(existing_pid):
+                        with _proc_lock:
+                            for mid, p in list(_model_processes.items()):
+                                try:
+                                    if p.pid == existing_pid:
+                                        if mid not in stopped_some:
+                                            stopped_some.append(mid)
+                                        _model_processes.pop(mid, None)
+                                except Exception:
+                                    pass
+                ports_to_wait = [target_port]
+            else:
+                for _port, _info in list(running.items()):
+                    is_other_dedicated = False
+                    for mid, mcfg in MODELS.items():
+                        if mcfg.get("dedicated") and mcfg.get("port") == _port:
+                            is_other_dedicated = True
+                            break
+                    if is_other_dedicated:
+                        continue  # preserve dedicated models on other GPUs
 
-            if running:
-                self._wait_for_port_free(running)
+                    existing_pid = _info["pid"]
+                    if kill_process(existing_pid):
+                        with _proc_lock:
+                            for mid, p in list(_model_processes.items()):
+                                try:
+                                    if p.pid == existing_pid:
+                                        if mid not in stopped_some:
+                                            stopped_some.append(mid)
+                                        _model_processes.pop(mid, None)
+                                except Exception:
+                                    pass
+                ports_to_wait = [p for p in running.keys() if not any(m.get("dedicated") and m.get("port") == p for m in MODELS.values())]
 
-            with _proc_lock:
-                _model_processes.clear()
-            with _log_lock:
-                for handle in _log_handles.values():
-                    try:
-                        handle.close()
-                    except OSError:
-                        pass
-                _log_handles.clear()
+            if ports_to_wait:
+                for p in ports_to_wait:
+                    self._wait_for_port_free(p)
 
-            port = master_port
+            if not is_dedicated:
+                with _proc_lock:
+                    for mid in list(_model_processes.keys()):
+                        if not MODELS.get(mid, {}).get("dedicated"):
+                            _model_processes.pop(mid, None)
+                with _log_lock:
+                    for mid in list(_log_handles.keys()):
+                        if not MODELS.get(mid, {}).get("dedicated"):
+                            handle = _log_handles.pop(mid, None)
+                            if handle:
+                                try:
+                                    handle.close()
+                                except OSError:
+                                    pass
+
+            port = target_port
         else:
             running = self._get_running_servers()
             port = target_model["port"]
@@ -656,7 +876,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         if stopped_some:
             self._wait_for_port_free(port)
 
-        binary_path = _CONFIG.get(
+        binary_path = target_model.get(
+            "binaryPath") or _CONFIG.get(
             "binaryPath",
             "/home/safiyu/llama.cpp/build/bin/llama-server")
         data_dir = _CONFIG.get("dataDir", "~/models")
@@ -704,18 +925,32 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         running = self._get_running_servers()
 
         if mode == "single_port":
-            if not running:
-                self.send_json_response(
-                    {"success": True,
-                     "message": "No model is currently running."})
-                return
-            pid = list(running.values())[0]["pid"]
+            if target_model.get("dedicated"):
+                port = target_model.get("port", 9000)
+                if port not in running:
+                    self.send_json_response(
+                        {"success": True,
+                         "message": f"Model {model_id} was already stopped."})
+                    return
+                pid = running[port]["pid"]
+            else:
+                master_port = _CONFIG.get("masterPort", 9000)
+                if master_port in running:
+                    pid = running[master_port]["pid"]
+                else:
+                    non_ded_pids = [info["pid"] for p, info in running.items() if not any(m.get("dedicated") and m.get("port") == p for m in MODELS.values())]
+                    if not non_ded_pids:
+                        self.send_json_response(
+                            {"success": True,
+                             "message": "No switched model is currently running."})
+                        return
+                    pid = non_ded_pids[0]
         else:
             port = target_model["port"]
             if port not in running:
                 self.send_json_response(
                     {"success": True,
-                     f"Model {model_id} was already stopped."})
+                     "message": f"Model {model_id} was already stopped."})
                 return
             pid = running[port]["pid"]
 
@@ -854,15 +1089,20 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                      "reason": f"Model file not found: {model_path}"})
                 continue
 
-            cmd_args, _ = self._build_cmd(cfg, binary_path, data_dir, port)
+            model_binary = cfg.get("binaryPath") or binary_path
+            cmd_args, _ = self._build_cmd(cfg, model_binary, data_dir, port)
 
             try:
                 log_file = open(cfg["logPath"], "w", buffering=1)
                 with _log_lock:
                     _log_handles[model_id] = log_file
 
+                from process import get_process_env
                 proc_kwargs = {
-                    "stdout": log_file, "stderr": subprocess.STDOUT}
+                    "stdout": log_file,
+                    "stderr": subprocess.STDOUT,
+                    "env": get_process_env(model_binary),
+                }
                 if not IS_WINDOWS:
                     proc_kwargs["start_new_session"] = True
 
@@ -952,6 +1192,28 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         }
         if data.get("mmproj"):
             new_model["mmproj"] = data["mmproj"]
+        if data.get("binaryPath"):
+            new_model["binaryPath"] = data["binaryPath"]
+        if data.get("gpu"):
+            new_model["gpu"] = data["gpu"]
+        if data.get("size"):
+            new_model["size"] = data["size"]
+        if data.get("dedicated") is not None:
+            new_model["dedicated"] = bool(data["dedicated"])
+
+        # ── Optional inference knobs (KV-quant, flash-attn, speculative) ──
+        kv_quant = str(data.get("kvQuant") or "").strip().lower()
+        if kv_quant:
+            new_model["kvQuant"] = kv_quant
+        if data.get("flashAttention") is not None:
+            new_model["flashAttention"] = bool(data["flashAttention"])
+        if data.get("draftModel"):
+            new_model["draftModel"] = str(data["draftModel"]).strip()
+        if data.get("draftGpuLayers") is not None:
+            try:
+                new_model["draftGpuLayers"] = int(data["draftGpuLayers"])
+            except (TypeError, ValueError):
+                pass
 
         with _models_lock:
             _CONFIG["models"][model_id] = new_model
@@ -1324,6 +1586,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             "ctxSize", "nParallel", "nGpuLayers", "temperature",
             "maxTokens", "topP", "batchSize", "threads", "extraArgs",
             "name", "desc", "devices", "mmproj", "port",
+            "binaryPath", "gpu", "dedicated",
+            "kvQuant", "flashAttention", "draftModel", "draftGpuLayers",
         }
         filtered = {k: v for k, v in updates.items() if k in allowed}
         if not filtered:
@@ -1332,7 +1596,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         runtime_params = {
             "ctxSize", "nParallel", "nGpuLayers", "batchSize", "threads",
-            "extraArgs", "devices", "mmproj", "port", "filename",
+            "extraArgs", "devices", "mmproj", "port", "filename", "binaryPath",
+            "kvQuant", "flashAttention", "draftModel", "draftGpuLayers",
         }
         requires_restart = bool(runtime_params & set(filtered.keys()))
 
@@ -1380,6 +1645,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             "name", "desc", "filename", "port", "ctxSize", "nParallel",
             "nGpuLayers", "batchSize", "threads", "temperature",
             "maxTokens", "topP", "devices", "extraArgs", "mmproj",
+            "binaryPath", "gpu", "dedicated",
+            "kvQuant", "flashAttention", "draftModel", "draftGpuLayers",
         }
         updates = {
             k: v for k, v in data.items()
@@ -1404,7 +1671,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         runtime_params = {
             "ctxSize", "nParallel", "nGpuLayers", "batchSize", "threads",
-            "extraArgs", "devices", "mmproj", "port", "filename",
+            "extraArgs", "devices", "mmproj", "port", "filename", "binaryPath",
+            "kvQuant", "flashAttention", "draftModel", "draftGpuLayers",
         }
         requires_restart = bool(runtime_params & set(updates.keys()))
 
@@ -1473,6 +1741,122 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         self.send_json_response({
             "files": files, "dataDir": data_dir,
             "dataDirExists": True,
+        })
+
+    # ─── Hugging Face hub + VRAM estimator ───────────────────────────────
+
+    def handle_api_hub_search(self, query):
+        """GET /api/hub/search?q=...&limit=N - search the HF hub for GGUF repos."""
+        import downloader
+        q = (query.get("q", [""])[0] or "").strip()
+        if not q:
+            self.send_error_response(400, "Missing 'q' search query")
+            return
+        try:
+            limit = int(query.get("limit", ["20"])[0])
+        except (ValueError, TypeError):
+            limit = 20
+        limit = max(1, min(limit, 100))
+        try:
+            results = downloader.search_hub(q, limit)
+        except Exception as e:
+            print(f"[hub] search failed: {e}")
+            self.send_error_response(502, f"Hub search failed: {e}")
+            return
+        self.send_json_response({"results": results, "count": len(results)})
+
+    def handle_api_hub_files(self, query):
+        """GET /api/hub/files?repo=owner/name - list gguf/mmproj files in a repo."""
+        import downloader
+        repo = (query.get("repo", [""])[0] or "").strip()
+        if not repo:
+            self.send_error_response(400, "Missing 'repo' parameter")
+            return
+        try:
+            files = downloader.list_repo_files(repo)
+        except Exception as e:
+            print(f"[hub] file listing failed for {repo}: {e}")
+            self.send_error_response(502, f"File listing failed: {e}")
+            return
+        self.send_json_response({"repo": repo, "files": files, "count": len(files)})
+
+    def handle_api_hub_downloads(self):
+        """GET /api/hub/downloads - report in-flight/recent download tasks."""
+        import downloader
+        try:
+            tasks = downloader.get_tasks_status(include_finished=True)
+        except Exception as e:
+            print(f"[hub] download status failed: {e}")
+            self.send_error_response(502, f"Download status failed: {e}")
+            return
+        self.send_json_response({"downloads": tasks, "count": len(tasks)})
+
+    def handle_api_vram_estimate(self, query):
+        """GET /api/vram/estimate?model=<id>&ctx=N&ngl=N - VRAM footprint breakdown.
+
+        ctx/ngl are optional overrides; they default to the model's stored
+        values. Returns a MiB breakdown (weights / KV cache / overhead) plus
+        a recommended layer count for the currently free VRAM.
+        """
+        import vram
+        from config import MODELS, _CONFIG
+        from process import get_gpu_telemetry
+
+        model_id = (query.get("model", [""])[0] or "").strip()
+        if not model_id or model_id not in MODELS:
+            self.send_error_response(400, "Missing or unknown 'model' id")
+            return
+
+        cfg = dict(MODELS[model_id])
+        cfg.setdefault("dataDir", _CONFIG.get("dataDir", "~/models"))
+
+        ctx_size = None
+        n_gpu_layers = None
+        try:
+            if query.get("ctx"):
+                ctx_size = int(query["ctx"][0])
+            if query.get("ngl"):
+                n_gpu_layers = int(query["ngl"][0])
+        except (ValueError, TypeError):
+            self.send_error_response(400, "ctx and ngl must be integers")
+            return
+
+        try:
+            estimate = vram.estimate_vram_usage(
+                cfg, ctx_size, n_gpu_layers)
+        except Exception as e:
+            print(f"[vram] estimate failed for {model_id}: {e}")
+            self.send_error_response(502, f"VRAM estimate failed: {e}")
+            return
+
+        # Attach an auto-tune suggestion when we can read GPU memory.
+        free_mb = 0.0
+        try:
+            tele = get_gpu_telemetry() or {}
+            for vendor in ("nvidia", "amd"):
+                gpu = tele.get(vendor)
+                if not isinstance(gpu, dict):
+                    continue
+                total = float(gpu.get("mem_total", 0) or 0)
+                used = float(gpu.get("mem_used", 0) or 0)
+                if total > 0:
+                    free_mb += max(0.0, total - used)
+        except Exception:
+            free_mb = 0.0
+
+        recommendation = None
+        if free_mb > 0:
+            try:
+                recommendation = vram.calculate_optimal_configuration(
+                    cfg, free_mb, free_mb)
+            except Exception as e:
+                print(f"[vram] optimize failed for {model_id}: {e}")
+
+        self.send_json_response({
+            "model": model_id,
+            "free_vram_mib": round(free_mb, 1),
+            "estimate": estimate,
+            "recommendation": recommendation,
         })
 
     # ─── Restart ─────────────────────────────────────────────────────────
@@ -1614,7 +1998,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
                 self._wait_for_port_free(port)
 
-                binary_path = _CONFIG.get(
+                binary_path = new_model_cfg.get(
+                    "binaryPath") or _CONFIG.get(
                     "binaryPath",
                     "/home/safiyu/llama.cpp/build/bin/llama-server")
                 data_dir = _CONFIG.get("dataDir", "~/models")
@@ -1625,8 +2010,12 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 with _log_lock:
                     _log_handles[model_id] = log_file
 
+                from process import get_process_env
                 proc_kwargs = {
-                    "stdout": log_file, "stderr": subprocess.STDOUT}
+                    "stdout": log_file,
+                    "stderr": subprocess.STDOUT,
+                    "env": get_process_env(binary_path),
+                }
                 if not IS_WINDOWS:
                     proc_kwargs["start_new_session"] = True
 
