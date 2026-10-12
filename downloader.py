@@ -132,7 +132,7 @@ def _sha256_file(path):
 
 def _register_model(data_dir, filename, name, repo_id):
     """Create a pre-configured entry in config.json for the downloaded file."""
-    from config import _CONFIG, save_config, _models_lock, _models_cache, get_global_mode
+    from config import _CONFIG, save_config, _models_lock, invalidate_models_cache, get_global_mode
     cfg = _CONFIG
     port = int(cfg.get("masterPort", 9000))
 
@@ -168,7 +168,7 @@ def _register_model(data_dir, filename, name, repo_id):
     }
     with _models_lock:
         cfg["models"][model_id] = entry
-        _models_cache = None
+        invalidate_models_cache()
     save_config(cfg)
     return model_id
 

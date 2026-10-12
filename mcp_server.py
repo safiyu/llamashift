@@ -33,7 +33,7 @@ if not logger.handlers:
 MAIN_SERVER_URL: str = os.environ.get("MAIN_SERVER_URL", "http://localhost:8002")
 MCP_AUTH_TOKEN: str = os.environ.get("MCP_AUTH_TOKEN", "")
 API_TIMEOUT: int = int(os.environ.get("MCP_API_TIMEOUT", "30"))
-MCP_PORT: int = int(os.environ.get("MCP_PORT", "28002"))
+MCP_PORT: int = int(os.environ.get("MCP_PORT", "28003"))
 MCP_HOST: str = os.environ.get("MCP_HOST", "")
 
 # Reusable httpx async client (lazy-initialized)
@@ -48,7 +48,6 @@ _http_client: httpx.AsyncClient | None = None
 # Create the FastMCP server with standard metadata
 mcp = FastMCP(
     name="llama-switcher-mcp",
-    version="1.0.0",
     instructions="Manage LLM models via llama-shift. Use list_models to discover available models before starting or stopping them.",
 )
 
@@ -536,7 +535,7 @@ def run_mcp_server(port: int | None = None, host: str | None = None) -> None:
     try:
         import signal as sig
         for s in (sig.SIGINT, sig.SIGTERM):
-            sig.signal(s, lambda *_: asyncio.run(_close_client()))
+            sig.signal(s, lambda *_: sys.exit(0))
     except (OSError, ValueError):
         # signal() only works in main thread; non-main threads skip gracefully
         pass
@@ -553,8 +552,11 @@ def run_mcp_server(port: int | None = None, host: str | None = None) -> None:
 
     logger.info("MCP Server starting on http://%s:%d", host or "*", port)
 
-    # Use the SSE transport from the official SDK
-    mcp.run(transport="sse", host=host or None, port=port)
+    # The official SDK takes host and port from settings, not from run()
+    mcp.settings.port = port
+    if host:
+        mcp.settings.host = host
+    mcp.run(transport="sse")
 
 
 if __name__ == "__main__":

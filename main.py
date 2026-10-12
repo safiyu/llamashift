@@ -20,7 +20,8 @@ import websockets
 # Import from modular components
 from config import (
     _CONFIG, MODELS, DEFAULT_RUNTIME_PARAMS, STATIC_DIR,
-    get_server_port, get_global_mode, save_config, _models_lock, _models_cache
+    get_server_port, get_global_mode, save_config, _models_lock, _models_cache,
+    get_ws_port,
 )
 from security import (
     _is_rate_limited, _is_account_locked, _record_failed_attempt,
@@ -30,13 +31,13 @@ from process import (
     get_running_servers, kill_process, get_host_stats, get_process_stats,
     get_process_cmdline, _model_processes, _proc_lock, _active_processes, _active_processes_lock,
     _log_handles, _log_lock, read_last_lines,
-    _stop_all_model_processes, _close_all_log_handles, get_gpu_telemetry
+    _stop_all_model_processes, _close_all_log_handles, get_gpu_telemetry,
+    start_mcp_server, stop_mcp_server, start_idle_reaper, stop_idle_reaper,
 )
-from config import _mcp_process, _mcp_lock
 from telemetry import (
     _ws_clients, _telemetry_broadcast_loop
 )
-from api import SwitcherAPIHandler, set_server_ready, is_server_ready
+from api import SwitcherAPIHandler, ThreadedServer, set_server_ready, is_server_ready
 
 # Runtime environment detection
 try:
@@ -119,6 +120,7 @@ def main():
 
     def handle_signal(signum, frame):
         print(f"\n[signal] Received signal {signum}. Shutting down...")
+        stop_idle_reaper()
         stop_mcp_server()
         _stop_all_model_processes()
         _close_all_log_handles()
@@ -132,11 +134,14 @@ def main():
 
     start_mcp_server()
 
+    from config import _CONFIG as live_config
+    if float(live_config.get("idleTimeoutSeconds", 0) or 0) > 0:
+        start_idle_reaper()
+
     handler = SwitcherAPIHandler
-    socketserver.TCPServer.allow_reuse_address = True
 
     server_port = get_server_port()
-    with socketserver.TCPServer(("", server_port), handler) as httpd:
+    with ThreadedServer(("", server_port), handler) as httpd:
         print(f"{'='*50}")
         print(f"  LlamaShift Backend v0.1.0")
         print(f"  Runtime: {RUNTIME_ENV}")
@@ -149,7 +154,7 @@ def main():
         set_server_ready()
 
         # Start WebSocket telemetry broadcast loop alongside HTTP server
-        ws_port = 28002  # separate from HTTP port
+        ws_port = get_ws_port()  # separate from the HTTP port
 
         async def _ws_handler(ws):
             _ws_clients.add(ws)
@@ -170,6 +175,13 @@ def main():
 
         try:
             asyncio.run(run_ws())
+        except OSError as e:
+            print(f"[ws] ERROR: cannot bind WebSocket telemetry port {ws_port}: {e}. "
+                  f"HTTP keeps serving; set WS_PORT to use another port.")
+            try:
+                http_thread.join()
+            except (KeyboardInterrupt, SystemExit):
+                httpd.shutdown()
         except (KeyboardInterrupt, SystemExit):
             httpd.shutdown()
 

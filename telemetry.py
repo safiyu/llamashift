@@ -23,12 +23,12 @@ async def _ws_broadcast(data: dict):
         return
     message = json.dumps(data)
     disconnected = set()
-    for client in _ws_clients:
+    for client in list(_ws_clients):
         try:
             await client.send(message)
         except Exception:
             disconnected.add(client)
-    _ws_clients -= disconnected
+    _ws_clients.difference_update(disconnected)
 
 
 async def _telemetry_broadcast_loop():

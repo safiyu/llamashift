@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 
-from config import IS_WINDOWS, IS_LINUX
+from config import IS_WINDOWS, IS_LINUX, IS_MACOS
 
 # Global process tracker — keyed by model_id -> Popen proc
 _model_processes = {}
@@ -37,10 +37,112 @@ _log_lock = threading.Lock()
 # Security log lock
 _security_log_lock = threading.Lock()
 
+# ─── In-flight gateway requests and swap draining ──────────────────────────
+# Gateway requests are counted per upstream port for their whole exchange
+# (streams included) so a single_port swap can wait for them before killing
+# the old model. Requests sent straight to a model port are not tracked.
+_flight_cv = threading.Condition()
+_inflight = {}   # port -> number of in-flight gateway requests
+_swapping = {}   # port -> (incoming model id, reject_all) while a swap is draining or loading
+
+
+def try_begin_request(port, model_id):
+    """Count a request on *port*; False when the port is being swapped to another model."""
+    with _flight_cv:
+        swap = _swapping.get(port)
+        if swap is not None and (swap[1] or swap[0] != model_id):
+            return False
+        _inflight[port] = _inflight.get(port, 0) + 1
+        return True
+
+
+def end_request(port):
+    with _flight_cv:
+        n = _inflight.get(port, 0) - 1
+        if n > 0:
+            _inflight[port] = n
+        else:
+            _inflight.pop(port, None)
+        _flight_cv.notify_all()
+
+
+def inflight_count(port):
+    with _flight_cv:
+        return _inflight.get(port, 0)
+
+
+def is_swapped_out(port, model_id):
+    """True when *port* is mid-swap and *model_id* is not the model coming in."""
+    with _flight_cv:
+        swap = _swapping.get(port)
+        return swap is not None and (swap[1] or swap[0] != model_id)
+
+
+def begin_swap(port, incoming_model_id, restart=False):
+    """Mark *port* as swapping; new gateway requests for other models get 503 model_swapping."""
+    with _flight_cv:
+        _swapping[port] = (incoming_model_id, bool(restart))
+
+
+def end_swap(port):
+    with _flight_cv:
+        _swapping.pop(port, None)
+        _flight_cv.notify_all()
+
+
+def drain_port(port, timeout=None):
+    """Wait until no gateway request is in flight on *port*; False if the timeout expired."""
+    if timeout is None:
+        from config import get_drain_timeout
+        timeout = get_drain_timeout()
+    deadline = time.monotonic() + float(timeout)
+    with _flight_cv:
+        while _inflight.get(port, 0) > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                print(f"[drain] Port {port}: {_inflight.get(port, 0)} request(s) still in flight "
+                      f"after {float(timeout):.0f}s, proceeding with the swap")
+                return False
+            _flight_cv.wait(min(remaining, 0.5))
+    return True
+
+
+def drain_and_kill(port, pid, incoming_model_id, restart=False):
+    """Mark the swap, let in-flight requests finish (bounded), then kill the old model."""
+    begin_swap(port, incoming_model_id, restart)
+    if inflight_count(port):
+        print(f"[drain] Waiting for {inflight_count(port)} in-flight request(s) on port {port}...")
+    drain_port(port)
+    return kill_process(pid)
+
+
+def end_swap_when_healthy(swap_ports, health_port, timeout):
+    """Release swap marks once the new model answers /health (or after *timeout*)."""
+    def _run():
+        import http.client
+        deadline = time.monotonic() + float(timeout)
+        try:
+            while time.monotonic() < deadline:
+                try:
+                    conn = http.client.HTTPConnection("127.0.0.1", int(health_port), timeout=2)
+                    conn.request("GET", "/health")
+                    ok = conn.getresponse().status == 200
+                    conn.close()
+                    if ok:
+                        return
+                except Exception:
+                    pass
+                time.sleep(0.5)
+        finally:
+            for p in swap_ports:
+                end_swap(p)
+    threading.Thread(target=_run, daemon=True, name="swap-release").start()
+
+
 # ─── Per-model activity tracking (idle reaper) ─────────────────────────────
 # model_id -> last activity timestamp (monotonic-ish via time.time()).
 # A model is "active" when it has served a proxied inference request recently;
-# the idle reaper terminates models that stay quiet past idleTimeoutMinutes.
+# the idle reaper terminates models that stay quiet past idleTimeoutSeconds.
 _model_last_activity = {}
 _model_activity_lock = threading.Lock()
 
@@ -124,6 +226,7 @@ def reap_idle_models(idle_timeout_seconds):
             if len(candidates) == len(MODELS):
                 break
 
+    reap_dedicated = bool(_CONFIG.get("idleReapDedicated", False))
     reaped = []
     for mid, (pid, port) in list(candidates.items()):
         ts, _ = get_model_activity(mid)
@@ -131,6 +234,10 @@ def reap_idle_models(idle_timeout_seconds):
             continue  # never touched via proxy/UI — leave it alone
         if now - ts < idle_timeout_seconds:
             continue
+        if MODELS[mid].get("dedicated") and not reap_dedicated:
+            continue
+        if inflight_count(port):
+            continue  # a long stream is still being served
         print(f"[reaper] Model {mid} idle for {int(now - ts)}s "
               f"(> {int(idle_timeout_seconds)}s), unloading")
         reaped.append(mid)
@@ -176,12 +283,11 @@ def stop_idle_reaper():
 
 def _idle_reaper_loop(interval_seconds=15):
     """Worker loop: reap idle models, push state updates via WebSocket."""
-    from config import _CONFIG
+    import config
     while not _idle_reaper_stop.is_set():
         try:
-            idle_min = _CONFIG.get("idleTimeoutMinutes", 20)
-            if idle_min:
-                timeout_s = int(float(idle_min) * 60)
+            timeout_s = float((config._CONFIG or {}).get("idleTimeoutSeconds", 0) or 0)
+            if timeout_s > 0:
                 reaped = reap_idle_models(timeout_s)
                 if reaped:
                     print(f"[reaper] Unloaded idle model(s): {', '.join(reaped)}")
@@ -311,10 +417,10 @@ def get_process_stats(pid):
                 # Simplified Windows stats
                 return {"cpu": 0.0, "mem": 0.0, "uptime": "Running"}
         else:
-            res = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "%cpu,%mem,etime", "--no-headers"],
-                capture_output=True, text=True
-            )
+            # BSD ps (macOS) has no --no-headers; "=" suppresses each header instead
+            ps_args = (["ps", "-p", str(pid), "-o", "%cpu=,%mem=,etime="] if IS_MACOS
+                       else ["ps", "-p", str(pid), "-o", "%cpu,%mem,etime", "--no-headers"])
+            res = subprocess.run(ps_args, capture_output=True, text=True)
             if res.returncode == 0 and res.stdout.strip():
                 parts = res.stdout.strip().split()
                 if len(parts) >= 3:
@@ -564,6 +670,24 @@ def _get_nvidia_power_fallback():
         pass
 
     return 0.0
+
+
+def get_free_vram_mib():
+    """Free VRAM in MiB summed over the NVIDIA and AMD GPUs seen by telemetry; None if unknown."""
+    try:
+        tele = get_gpu_telemetry() or {}
+        free = 0.0
+        for vendor in ("nvidia", "amd"):
+            gpu = tele.get(vendor)
+            if not isinstance(gpu, dict):
+                continue
+            total = float(gpu.get("mem_total", 0) or 0)
+            used = float(gpu.get("mem_used", 0) or 0)
+            if total > 0:
+                free += max(0.0, total - used)
+        return free if free > 0 else None
+    except Exception:
+        return None
 
 
 def get_gpu_telemetry():
@@ -852,6 +976,10 @@ def get_process_cmdline(pid):
                     if "CommandLine=" in line:
                         return line.split("=", 1)[1].strip('" ')
             return ""
+        elif IS_MACOS:
+            res = subprocess.run(["ps", "-p", str(pid), "-o", "args="],
+                                 capture_output=True, text=True, timeout=5)
+            return res.stdout.strip() if res.returncode == 0 else ""
         return ""
     except Exception:
         return ""
@@ -997,6 +1125,18 @@ def get_child_processes(pid):
                             pass
             except Exception:
                 pass
+        elif IS_MACOS:
+            try:
+                res = subprocess.run(["pgrep", "-P", str(pid)],
+                                    capture_output=True, text=True, timeout=5)
+                if res.returncode == 0 and res.stdout.strip():
+                    for line in res.stdout.split():
+                        try:
+                            child_pids.append(int(line.strip()))
+                        except ValueError:
+                            pass
+            except Exception:
+                pass
         else:
             try:
                 res = subprocess.run(["ps", "--ppid", str(pid), "-o", "pid=", "--no-headers"],
@@ -1012,6 +1152,19 @@ def get_child_processes(pid):
     except Exception:
         pass
     return child_pids
+
+
+def _pid_gone(pid):
+    """True once *pid* no longer exists; reaps our own child first, since a zombie still answers kill(pid, 0)."""
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
 
 
 def kill_process(pid):
@@ -1055,18 +1208,12 @@ def kill_process(pid):
             
             for _ in range(30):
                 time.sleep(0.1)
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
+                if _pid_gone(pid):
                     return True
-            
+
             os.kill(pid, signal.SIGKILL)
             time.sleep(0.5)
-            try:
-                os.kill(pid, 0)
-                return False
-            except ProcessLookupError:
-                return True
+            return _pid_gone(pid)
     except (ProcessLookupError, PermissionError):
         return True
     except OSError:
@@ -1075,24 +1222,71 @@ def kill_process(pid):
         return False
 
 
+def _port_accepting(port):
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(0.3)
+        return sock.connect_ex(("127.0.0.1", int(port))) == 0
+    finally:
+        sock.close()
+
+
 def start_mcp_server():
-    """Start the MCP server process."""
+    """Start the MCP server process; returns False (with a clear log line) if it dies at launch."""
     global _mcp_process
-    
+
     with _mcp_lock:
         if _mcp_process and _mcp_process.poll() is None:
             print("[mcp] MCP server already running")
             return True
-    
+
+    import config
+    mcp_port = config.get_mcp_port()
+    if mcp_port == config.get_ws_port():
+        print(f"[mcp] ERROR: MCP port {mcp_port} equals the WebSocket telemetry port; "
+              f"set MCP_PORT or WS_PORT to different values. MCP not started.")
+        return False
+
+    if _port_accepting(mcp_port):
+        print(f"[mcp] ERROR: port {mcp_port} is already in use; set MCP_PORT to a free port. MCP not started.")
+        return False
+
     try:
         mcp_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")
-        _mcp_process = subprocess.Popen(
-            [sys.executable, mcp_script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True
-        )
-        print(f"[mcp] Started MCP server with PID {_mcp_process.pid}")
+        config._ensure_log_dir()
+        log_path = os.path.join(config.LOG_DIR, "mcp.log")
+        env = {**os.environ, "MCP_PORT": str(mcp_port)}
+        # Point MCP at the real HTTP port, and let it authenticate when a management key is set
+        env.setdefault("MAIN_SERVER_URL", f"http://localhost:{(config._CONFIG or {}).get('serverPort', 8002)}")
+        if (config._CONFIG or {}).get("managementApiKey"):
+            env.setdefault("MCP_AUTH_TOKEN", str(config._CONFIG["managementApiKey"]))
+        with open(log_path, "ab") as log_file:
+            proc = subprocess.Popen(
+                [sys.executable, mcp_script],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+            )
+
+        deadline = time.monotonic() + 6.0  # the MCP SDK takes a few seconds to import
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                tail = read_last_lines(log_path, 5).strip()
+                print(f"[mcp] ERROR: MCP server exited at startup (code {proc.returncode}); "
+                      f"port {mcp_port} may be in use. Last log lines:\n{tail}")
+                return False
+            if _port_accepting(mcp_port):
+                break
+            time.sleep(0.1)
+        else:
+            print(f"[mcp] WARNING: MCP server is running but not accepting connections on port "
+                  f"{mcp_port} after 6s; check {log_path}")
+
+        with _mcp_lock:
+            _mcp_process = proc
+        print(f"[mcp] Started MCP server with PID {proc.pid} on port {mcp_port}")
         return True
     except Exception as e:
         print(f"[mcp] Failed to start MCP server: {e}")
@@ -1126,7 +1320,7 @@ def _stop_all_model_processes():
     with _proc_lock:
         for model_id, proc_info in list(_model_processes.items()):
             try:
-                proc = proc_info.get("process")
+                proc = proc_info if hasattr(proc_info, "poll") else proc_info.get("process")
                 if proc and proc.poll() is None:
                     proc.terminate()
                     try:

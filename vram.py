@@ -402,6 +402,24 @@ def calculate_optimal_configuration(model_cfg, available_vram_mb, free_vram_mb=N
     return result
 
 
+def fit_warnings(model_id, model_cfg, free_mib, outgoing_mib=0.0):
+    """Compare the estimated footprint with the VRAM that will be free once outgoing models stop.
+
+    Returns {"warnings": [...], "needed_mib": float, "available_mib": float}; the estimate is
+    approximate, so callers treat the result as advice unless strictVram is on.
+    """
+    est = estimate_vram_usage(model_cfg)
+    needed = float(est["total_mib"])
+    available = float(free_mib) + float(outgoing_mib)
+    warnings = []
+    if needed > available:
+        warnings.append(
+            f"Model '{model_id}' needs about {needed:.0f} MiB of VRAM but only about "
+            f"{available:.0f} MiB will be free; it may fail to load or run out of memory."
+        )
+    return {"warnings": warnings, "needed_mib": round(needed, 1), "available_mib": round(available, 1)}
+
+
 def _human_size(size_bytes):
     if size_bytes == 0:
         return "0 B"
