@@ -805,6 +805,15 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             },
         })
 
+    def handle_api_gpu(self):
+        from process import get_gpu_telemetry
+        try:
+            telemetry = get_gpu_telemetry()
+        except Exception as e:
+            print(f"[gpu] telemetry failed: {e}")
+            telemetry = None
+        self.send_json_response(telemetry if isinstance(telemetry, dict) else {"nvidia": None, "amd": None})
+
     def handle_api_devices(self):
         from process import get_available_devices
         devices = get_available_devices()
