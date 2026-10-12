@@ -618,3 +618,39 @@ def test_darwin_is_its_own_posix_environment():
     res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          env={**os.environ, "PYTHONPATH": ROOT})
     assert res.stdout.strip().splitlines()[-1] == "macos True False False", res.stderr
+
+
+# ── /api/gpu handler ─────────────────────────────────────────────────────
+
+GPU = {"name": "RTX", "temp": 40.0, "util": 3.0, "mem_used": 1024.0, "mem_total": 8192.0, "power": 20.0}
+
+
+def test_gpu_handler_returns_the_telemetry_shape(monkeypatch):
+    monkeypatch.setattr(process, "get_gpu_telemetry", lambda: {"nvidia": GPU, "amd": None})
+    h = H()
+    h.handle_api_gpu()
+    assert h.sent == [(200, {"nvidia": GPU, "amd": None})]
+
+
+def test_gpu_handler_returns_nulls_when_telemetry_raises(monkeypatch):
+    def boom():
+        raise RuntimeError("smi exploded")
+    monkeypatch.setattr(process, "get_gpu_telemetry", boom)
+    h = H()
+    h.handle_api_gpu()
+    assert h.sent == [(200, {"nvidia": None, "amd": None})]
+
+
+def test_gpu_route_is_behind_the_management_key():
+    ok, h = auth("/api/gpu")
+    assert not ok and h.status == 401
+    ok, _ = auth("/api/gpu", {"Authorization": "Bearer sekret"})
+    assert ok
+
+
+def test_every_handler_called_in_api_py_is_defined():
+    import re
+    src = open(os.path.join(ROOT, "api.py"), encoding="utf-8").read()
+    defined = set(re.findall(r"^\s+def (\w+)\(", src, re.M))
+    called = set(re.findall(r"self\.(handle_\w+|send_json_response|send_error_response)\(", src))
+    assert sorted(c for c in called if c not in defined) == []

@@ -85,6 +85,13 @@ def test_management_api_key_end_to_end(start_server):
     assert http("GET", f"{srv.base}/")[0] == 200  # dashboard assets stay reachable
 
 
+def test_gpu_endpoint_works_and_respects_the_management_key(start_server):
+    srv = start_server(models=MODELS, managementApiKey="s3cret")
+    assert http("GET", f"{srv.base}/api/gpu")[0] == 401
+    status, body, _ = http("GET", f"{srv.base}/api/gpu", headers={"Authorization": "Bearer s3cret"})
+    assert status == 200 and set(json.loads(body)) == {"nvidia", "amd"}
+
+
 def test_start_returns_warnings_and_active_matches_status(start_server):
     srv = start_server(models=MODELS)
     status, body, _ = http("POST", f"{srv.base}/api/start", {"model": "b"})
