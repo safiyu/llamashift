@@ -1,3 +1,18 @@
+// Send the PIN session with every /api call so the dashboard keeps working when managementApiKey is set
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+    const url = typeof input === 'string' ? input : ((input && input.url) || '');
+    if (url.startsWith('/api/')) {
+        const token = localStorage.getItem('llamashift_pin_session_token');
+        if (token) {
+            const headers = new Headers(init.headers || (typeof input !== 'string' ? input.headers : undefined) || {});
+            if (!headers.has('X-Pin-Session')) headers.set('X-Pin-Session', token);
+            init = { ...init, headers };
+        }
+    }
+    return _nativeFetch(input, init);
+};
+
 // Default runtime parameters
 const DEFAULT_PARAMS = {
     ctxSize: 16384,

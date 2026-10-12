@@ -4,11 +4,13 @@ API module for llama-shift server.
 Handles HTTP API endpoints for model management, configuration, and control.
 """
 
+import hmac
 import http.server
 import json
 import os
 import re
 import socket
+import socketserver
 import subprocess
 import sys
 import threading
@@ -41,6 +43,13 @@ def is_server_ready():
         return _server_ready
 
 
+class ThreadedServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    """One thread per request, so a streaming /v1 call never blocks health checks or other requests."""
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 64
+
+
 # ─── HTTP API Handler Class ────────────────────────────────────────────────
 class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
     """HTTP API handler for llama-shift server."""
@@ -63,13 +72,47 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         if origin in allowed_origins:
             self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE, PATCH')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Pin-Session')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Pin-Session, Authorization, X-API-Key')
         self.send_header('Access-Control-Allow-Credentials', 'true')
         super().end_headers()
 
     def do_OPTIONS(self):
         self.send_response(200)
         self.end_headers()
+
+    # Routes that stay open when managementApiKey is set: liveness and the PIN login flow.
+    AUTH_EXEMPT_PATHS = ("/api/health", "/api/pin", "/api/pin/status")
+
+    def _management_auth_ok(self, path):
+        """Gate /api/* behind the optional managementApiKey (Bearer, X-API-Key or a valid PIN session)."""
+        from config import _CONFIG
+        if not path.startswith("/api/") or path in self.AUTH_EXEMPT_PATHS:
+            return True
+        key = _CONFIG.get("managementApiKey")
+        if not key:
+            return True
+
+        presented = self.headers.get("X-API-Key", "")
+        auth = self.headers.get("Authorization", "")
+        if not presented and auth.startswith("Bearer "):
+            presented = auth[len("Bearer "):].strip()
+        if presented and hmac.compare_digest(presented.encode("utf-8"), str(key).encode("utf-8")):
+            return True
+
+        from security import _PIN_SESSIONS, PIN_SESSION_TIMEOUT
+        token = self.headers.get("X-Pin-Session")
+        session = _PIN_SESSIONS.get(token) if token else None
+        if session and time.time() - session["created_at"] < PIN_SESSION_TIMEOUT:
+            return True
+
+        body = json.dumps({"error": "Unauthorized: a valid management API key or PIN session is required"}).encode("utf-8")
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("WWW-Authenticate", "Bearer")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
 
     # Maximum request body accepted on the /v1/* gateway path. OpenAI
     # chat payloads are tiny; this exists purely to stop an unbounded
@@ -125,6 +168,9 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         if self._dispatch_gateway_proxy(path, query):
             return
 
+        if not self._management_auth_ok(path):
+            return
+
         if path == "/api/health":
             self.handle_api_health()
         elif path == "/api/active":
@@ -166,6 +212,9 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
 
+        if not self._management_auth_ok(path):
+            return
+
         if path.startswith("/api/models/"):
             model_id = path[len("/api/models/"):]
             if model_id:
@@ -178,9 +227,31 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error_response(404, "Endpoint not found")
 
+    def do_PATCH(self):
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+
+        if not self._management_auth_ok(path):
+            return
+
+        if path == "/api/models":
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8')
+            try:
+                data = json.loads(body)
+            except ValueError:
+                self.send_error_response(400, "Invalid JSON body")
+                return
+            self.handle_api_model_patch(data)
+        else:
+            self.send_error_response(404, "Endpoint not found")
+
     def do_DELETE(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
+
+        if not self._management_auth_ok(path):
+            return
 
         if path == "/api/models":
             query = urllib.parse.parse_qs(parsed_url.query)
@@ -197,6 +268,9 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         # ── Unified OpenAI gateway: POST /v1/chat/completions, /v1/completions,
         #    /v1/embeddings, /v1/tokenize, ... ──
         if self._dispatch_gateway_proxy(path, query):
+            return
+
+        if not self._management_auth_ok(path):
             return
 
         if path in ["/api/start", "/api/stop", "/api/stop_all", "/api/start_all",
@@ -269,16 +343,16 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_error_response(500, f"Error serving file: {str(e)}")
 
     # ─── JSON helpers ────────────────────────────────────────────────────
-    def send_json_response(self, data):
+    def send_json_response(self, data, code=200):
         response_bytes = json.dumps(data).encode('utf-8')
-        self.send_response(200)
+        self.send_response(code)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(response_bytes)))
         self.end_headers()
         self.wfile.write(response_bytes)
 
-    def send_error_response(self, code, message):
-        response_bytes = json.dumps({"error": message}).encode('utf-8')
+    def send_error_response(self, code, message, extra=None):
+        response_bytes = json.dumps({"error": message, **(extra or {})}).encode('utf-8')
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(response_bytes)))
@@ -374,7 +448,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         Returns the pid that was killed (or None).
         """
         from process import _cleanup_stale_tracked_processes, get_running_servers, is_llama_server
-        from api import _model_processes, _proc_lock, _active_processes, _active_processes_lock
+        from process import _model_processes, _proc_lock, _active_processes, _active_processes_lock
 
         _cleanup_stale_tracked_processes()
         running = running if running is not None else get_running_servers()
@@ -420,12 +494,14 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                      is_single_port):
         """Spawn a single model process.
 
-        Returns the Popen proc and log file handle on success.
-        Sends an error response and returns None on failure.
+        Returns the Popen proc and log file handle on success. On failure it sends a
+        JSON error and returns (None, None); a process that launched but could not be
+        registered is killed so it never runs unmanaged.
         """
         from process import (
             _log_handles, _log_lock, _proc_lock, _active_processes_lock,
-            get_process_env,
+            _model_processes, _active_processes, get_process_env,
+            read_last_lines,
         )
 
         cmd_args, model_path = self._build_cmd(
@@ -443,6 +519,20 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_error_response(400, f"Port {port} is already in use")
             return None, None
 
+        def _forget():
+            with _log_lock:
+                handle = _log_handles.pop(model_id, None)
+            if handle:
+                try:
+                    handle.close()
+                except OSError:
+                    pass
+            with _proc_lock:
+                _model_processes.pop(model_id, None)
+                with _active_processes_lock:
+                    _active_processes.discard(model_id)
+
+        proc = None
         try:
             log_dir = os.path.dirname(target_model["logPath"])
             if log_dir:
@@ -464,17 +554,12 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
             time.sleep(0.5)
             if proc.poll() is not None:
-                stderr_output = proc.stderr.read() if proc.stderr else ""
-                with _log_lock:
-                    _log_handles.pop(model_id, None)
-                with _proc_lock:
-                    _model_processes.pop(model_id, None)
-                    with _active_processes_lock:
-                        _active_processes.discard(model_id)
+                _forget()
+                tail = read_last_lines(target_model["logPath"], 8).strip()
                 self.send_error_response(
                     500,
                     f"Process died immediately (exit code {proc.returncode}). "
-                    f"Check logs for details.",
+                    f"Last log lines: {tail}",
                 )
                 return None, None
 
@@ -485,14 +570,29 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
             return proc, log_file
         except Exception as e:
-            with _log_lock:
-                _log_handles.pop(model_id, None)
-            with _proc_lock:
-                _model_processes.pop(model_id, None)
-                with _active_processes_lock:
-                    _active_processes.discard(model_id)
+            if proc is not None:
+                self._stop_owned_process(proc)
+            _forget()
             self.send_error_response(500, f"Failed to spawn model: {str(e)}")
             return None, None
+
+    @staticmethod
+    def _stop_owned_process(proc):
+        """Terminate and reap a process we just launched (its group on POSIX, since it has its own session)."""
+        if proc.poll() is not None:
+            return
+        try:
+            if IS_WINDOWS:
+                proc.terminate()
+            else:
+                os.killpg(proc.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
 
     @staticmethod
     def _get_running_servers():
@@ -503,7 +603,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
     # ─── API Handlers ────────────────────────────────────────────────────
 
     def handle_api_config_get(self):
-        from config import _CONFIG, get_global_mode
+        from config import _CONFIG, get_global_mode, get_ws_port, get_mcp_port
         binary_path = _CONFIG.get("binaryPath",
                                   "/home/safiyu/llama.cpp/build/bin/llama-server")
         data_dir = _CONFIG.get("dataDir", "~/models")
@@ -515,6 +615,9 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             "appName": _CONFIG.get("appName", "llamashift"),
             "serviceName": _CONFIG.get("serviceName", "llamashift"),
             "masterPort": _CONFIG.get("masterPort", 9000),
+            "wsPort": get_ws_port(),
+            "mcpPort": get_mcp_port(),
+            "managementAuthRequired": bool(_CONFIG.get("managementApiKey")),
             "binaryPath": binary_path,
             "binaryExists": os.path.isfile(binary_path)
                             and os.access(binary_path, os.X_OK),
@@ -624,8 +727,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 "gpu":       cfg.get("gpu", ""),
                 "devices":   cfg.get("devices", []),
                 "port":      effective_port,
-                "endpoint":  cfg.get(
-                    "endpoint", f"http://localhost:{effective_port}/v1"),
+                "endpoint":  f"http://localhost:{effective_port}/v1",
                 "dedicated": cfg.get("dedicated", False),
                 "pid":       pid,
                 "cpu":       stats["cpu"],
@@ -674,8 +776,10 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             if is_running:
                 stats = get_process_stats(pid)
 
+            shared = mode == "single_port" and not cfg.get("dedicated")
             status_list.append({
                 **cfg,
+                "effectivePort": _CONFIG.get("masterPort", 9000) if shared else port,
                 "status": "running" if is_running else "stopped",
                 "pid": pid,
                 "cpu": stats["cpu"],
@@ -692,6 +796,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         self.send_json_response({
             "mode": mode,
+            "masterPort": _CONFIG.get("masterPort", 9000),
             "models": status_list,
             "host": host_stats,
             "mcp": {
@@ -764,26 +869,98 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 "message": "LlamaShift server is running",
             })
         else:
-            self.send_error_response(503, "Server starting")
-            response_bytes = json.dumps(
-                {"status": "starting", "message": "Server is initializing"}
-            ).encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(response_bytes)))
-            self.end_headers()
-            self.wfile.write(response_bytes)
+            self.send_json_response({
+                "status": "starting",
+                "message": "Server is initializing",
+                "error": "Server starting",
+            }, code=503)
 
     # ─── Model lifecycle handlers ────────────────────────────────────────
 
+    @staticmethod
+    def _predict_outgoing_ids(mode, target_model, running):
+        """Ids of the running models a start of *target_model* will stop (matched by filename)."""
+        from config import MODELS, _CONFIG
+        from process import get_process_cmdline
+
+        master_port = _CONFIG.get("masterPort", 9000)
+        if mode == "single_port":
+            if target_model.get("dedicated", False):
+                ports = [target_model.get("port", master_port)]
+            else:
+                ports = [p for p in running
+                         if not any(m.get("dedicated") and m.get("port") == p for m in MODELS.values())]
+        else:
+            ports = [target_model["port"]]
+
+        ids = []
+        for p in ports:
+            if p not in running:
+                continue
+            cmdline = get_process_cmdline(running[p]["pid"])
+            for mid, cfg in MODELS.items():
+                fname = cfg.get("filename", "")
+                if fname and fname in cmdline:
+                    ids.append(mid)
+                    break
+        return ids
+
+    @staticmethod
+    def _vram_check(model_id, target_model, outgoing_ids):
+        """Estimate whether the model fits once the outgoing models stop; never raises.
+
+        Returns (warnings, details). Telemetry or estimator failures yield no warnings,
+        so they can never block a start.
+        """
+        try:
+            import vram
+            from config import MODELS, _CONFIG
+            from process import get_free_vram_mib
+
+            free = get_free_vram_mib()
+            if not free:
+                return [], {}
+            data_dir = _CONFIG.get("dataDir", "~/models")
+            cfg = dict(target_model)
+            cfg.setdefault("dataDir", data_dir)
+            outgoing = 0.0
+            for mid in outgoing_ids:
+                try:
+                    ocfg = dict(MODELS[mid])
+                    ocfg.setdefault("dataDir", data_dir)
+                    outgoing += vram.estimate_vram_usage(ocfg)["total_mib"]
+                except Exception:
+                    pass
+            result = vram.fit_warnings(model_id, cfg, free, outgoing)
+            return result["warnings"], result
+        except Exception as e:
+            print(f"[vram] Fit check skipped for {model_id}: {e}")
+            return [], {}
+
     def handle_api_start(self, data):
+        """POST /api/start: swap in a model; swap marks are released once the new model is healthy."""
+        from process import end_swap
+        swap_ports = []
+        handoff = []
+        try:
+            self._start_model(data, swap_ports, handoff)
+        finally:
+            if not handoff:
+                for p in swap_ports:
+                    end_swap(p)
+
+    def _start_model(self, data, swap_ports, handoff):
         from config import MODELS, _CONFIG, get_global_mode
         from process import (
-            kill_process, get_process_cmdline, _process_matches_model,
+            get_process_cmdline, _process_matches_model,
             _cleanup_stale_tracked_processes, _model_processes, _proc_lock,
             _active_processes, _active_processes_lock, start_mcp_server,
-            _log_handles, _log_lock,
+            _log_handles, _log_lock, drain_and_kill, end_swap_when_healthy,
         )
+
+        def kill_for_swap(swap_port, pid):
+            swap_ports.append(swap_port)
+            return drain_and_kill(swap_port, pid, model_id, restart)
 
         model_id = data.get("model")
         if not model_id or model_id not in MODELS:
@@ -794,6 +971,44 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         mode = get_global_mode()
         target_model = MODELS[model_id]
         stopped_some = []
+
+        binary_path = target_model.get(
+            "binaryPath") or _CONFIG.get(
+            "binaryPath",
+            "/home/safiyu/llama.cpp/build/bin/llama-server")
+        data_dir = _CONFIG.get("dataDir", "~/models")
+
+        # Validate before stopping anything, so a bad request never kills the running model
+        if not os.path.isfile(binary_path):
+            self.send_error_response(
+                400,
+                f"Binary not found: {binary_path}. Please check config.json "
+                f"'binaryPath' or build llama.cpp.")
+            return
+        if not os.access(binary_path, os.X_OK):
+            self.send_error_response(
+                400,
+                f"Binary not executable: {binary_path}. "
+                f"Run: chmod +x {binary_path}")
+            return
+        model_path = os.path.join(os.path.expanduser(data_dir), target_model["filename"])
+        if not os.path.exists(model_path):
+            self.send_error_response(400, f"Model file not found: {model_path}")
+            return
+
+        pre_running = self._get_running_servers()
+        outgoing_ids = self._predict_outgoing_ids(mode, target_model, pre_running)
+        restart = model_id in outgoing_ids
+        warnings, vram_info = self._vram_check(model_id, target_model, outgoing_ids)
+        if warnings:
+            print(f"[vram] {' '.join(warnings)}")
+            if _CONFIG.get("strictVram", False) and not data.get("force", False):
+                self.send_error_response(
+                    409,
+                    warnings[0] + " Send \"force\": true to start anyway, or set strictVram to false.",
+                    extra={"warnings": warnings, **vram_info},
+                )
+                return
 
         if mode == "single_port":
             master_port = _CONFIG.get("masterPort", 9000)
@@ -806,7 +1021,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             if is_dedicated:
                 if target_port in running:
                     existing_pid = running[target_port]["pid"]
-                    if kill_process(existing_pid):
+                    if kill_for_swap(target_port, existing_pid):
                         with _proc_lock:
                             for mid, p in list(_model_processes.items()):
                                 try:
@@ -828,7 +1043,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                         continue  # preserve dedicated models on other GPUs
 
                     existing_pid = _info["pid"]
-                    if kill_process(existing_pid):
+                    if kill_for_swap(_port, existing_pid):
                         with _proc_lock:
                             for mid, p in list(_model_processes.items()):
                                 try:
@@ -869,46 +1084,32 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                         continue
                     if other_cfg["port"] == port and port in running:
                         pid = running[port]["pid"]
-                        if kill_process(pid):
+                        if kill_for_swap(port, pid):
                             stopped_some.append(other_id)
                             break
 
         if stopped_some:
             self._wait_for_port_free(port)
 
-        binary_path = target_model.get(
-            "binaryPath") or _CONFIG.get(
-            "binaryPath",
-            "/home/safiyu/llama.cpp/build/bin/llama-server")
-        data_dir = _CONFIG.get("dataDir", "~/models")
-
-        # Validate binary
-        if not os.path.isfile(binary_path):
-            self.send_error_response(
-                400,
-                f"Binary not found: {binary_path}. Please check config.json "
-                f"'binaryPath' or build llama.cpp.")
-            return
-        if not os.access(binary_path, os.X_OK):
-            self.send_error_response(
-                400,
-                f"Binary not executable: {binary_path}. "
-                f"Run: chmod +x {binary_path}")
-            return
-
         proc, _ = self._spawn_model(model_id, target_model, binary_path,
                                     data_dir, port, mode == "single_port")
         if proc is None:
             return
 
+        if swap_ports:
+            end_swap_when_healthy(
+                list(swap_ports), port, int(_CONFIG.get("coldStartTimeoutSeconds", 120)))
+            handoff.append(True)
+
         self.send_json_response({
             "success": True,
             "message": f"Starting {target_model['name']}...",
             "stopped": stopped_some,
+            "warnings": warnings,
         })
 
     def handle_api_stop(self, data):
-        from config import MODELS, get_global_mode
+        from config import MODELS, _CONFIG, get_global_mode
         from process import (
             get_running_servers, kill_process, _model_processes, _proc_lock,
             _active_processes, _active_processes_lock, _log_handles, _log_lock,
@@ -1137,7 +1338,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         self.send_json_response({"models": get_models()})
 
     def handle_api_models_post(self, data):
-        from config import MODELS, _CONFIG, save_config, _models_lock, _models_cache
+        from config import MODELS, _CONFIG, save_config, _models_lock, invalidate_models_cache
         model_id = data.get("id")
         if not model_id or not re.match(r'^[a-zA-Z0-9_]+$', model_id):
             self.send_error_response(
@@ -1217,7 +1418,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         with _models_lock:
             _CONFIG["models"][model_id] = new_model
-            _models_cache = None
+            invalidate_models_cache()
         save_config(_CONFIG)
 
         self.send_json_response({
@@ -1228,7 +1429,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         })
 
     def handle_api_model_delete(self, model_id):
-        from config import MODELS, _CONFIG, save_config, _models_lock, _models_cache
+        from config import MODELS, _CONFIG, save_config, _models_lock, invalidate_models_cache
         from process import (
             _model_processes, _proc_lock, _log_handles, _log_lock,
             get_running_servers, _cleanup_stale_tracked_processes,
@@ -1260,7 +1461,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         with _models_lock:
             _CONFIG["models"].pop(model_id, None)
-            _models_cache = None
+            invalidate_models_cache()
         save_config(_CONFIG)
 
         with _proc_lock:
@@ -1546,10 +1747,10 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 return
             ports_used[port] = model_id
 
-        from config import _CONFIG, _models_lock, _models_cache, save_config
+        from config import _CONFIG, _models_lock, invalidate_models_cache, save_config
         with _models_lock:
             _CONFIG["models"] = models
-            _models_cache = None
+            invalidate_models_cache()
         save_config(_CONFIG)
 
         self.send_json_response({
@@ -1562,7 +1763,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_api_model_patch(self, data):
         from config import (
-            MODELS, _CONFIG, save_config, _models_lock, _models_cache,
+            MODELS, _CONFIG, save_config, _models_lock, invalidate_models_cache,
             get_global_mode,
         )
         from process import (
@@ -1607,7 +1808,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         with _models_lock:
             _CONFIG["models"][model_id].update(filtered)
-            _models_cache = None
+            invalidate_models_cache()
         save_config(_CONFIG)
 
         response_data = {
@@ -1628,7 +1829,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_api_model_put(self, model_id, data):
         from config import (
-            MODELS, _CONFIG, save_config, _models_lock, _models_cache,
+            MODELS, _CONFIG, save_config, _models_lock, invalidate_models_cache,
             get_global_mode,
         )
         from process import (
@@ -1682,7 +1883,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         with _models_lock:
             _CONFIG["models"][model_id].update(updates)
-            _models_cache = None
+            invalidate_models_cache()
         save_config(_CONFIG)
 
         response_data = {

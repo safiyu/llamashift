@@ -6,9 +6,13 @@
     "dataDir": "~/models",
     "mode": "single_port",
     "serverPort": 8002,
-    "idleTimeoutMinutes": 15,
+    "idleTimeoutSeconds": 0,
+    "idleReapDedicated": false,
     "autoSpawnEnabled": true,
     "coldStartTimeoutSeconds": 120,
+    "drainTimeoutSeconds": 60,
+    "strictVram": false,
+    "managementApiKey": "",
     "models": {
         "example_model": {
             "id": "example_model",

@@ -107,13 +107,15 @@ def _auth_error_response(handler):
     handler.wfile.write(body)
 
 
-def _openai_error(handler, status, message, etype="invalid_request_error", code=None):
+def _openai_error(handler, status, message, etype="invalid_request_error", code=None, headers=None):
     err = {"message": message, "type": etype, "param": None}
     if code:
         err["code"] = code
     body = json.dumps({"error": err}).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
+    for key, value in (headers or {}).items():
+        handler.send_header(key, value)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -246,11 +248,13 @@ def ensure_model_running(model_id, model_cfg, timeout=None):
                 _model_processes, _proc_lock, _active_processes,
                 _active_processes_lock, _log_handles, _log_lock,
                 get_process_env, _cleanup_stale_tracked_processes,
+                begin_swap, end_swap, drain_and_kill,
             )
             import os
             import socket
             import subprocess
 
+            swap_marks = []
             try:
                 mode = get_global_mode()
                 master_port = C.get("masterPort", 9000)
@@ -259,11 +263,22 @@ def ensure_model_running(model_id, model_cfg, timeout=None):
 
                 _cleanup_stale_tracked_processes()
 
-                # Tear down anything occupying the target port.
+                # Tear down anything occupying the target port, after in-flight requests drain.
                 from process import get_running_servers, kill_process, wait_for_port_free
                 running = get_running_servers()
+
+                try:
+                    outgoing = SwitcherAPIHandler._predict_outgoing_ids(mode, model_cfg, running)
+                    advice, _ = SwitcherAPIHandler._vram_check(model_id, model_cfg, outgoing)
+                    if advice:
+                        print(f"[vram] {' '.join(advice)}")
+                except Exception:
+                    pass
+
+                begin_swap(target_port, model_id)
+                swap_marks.append(target_port)
                 if target_port in running:
-                    kill_process(running[target_port]["pid"])
+                    drain_and_kill(target_port, running[target_port]["pid"], model_id)
                 # single-port: also free the shared master port if different
                 if mode == "single_port" and target_port == master_port:
                     for p, info in list(running.items()):
@@ -272,7 +287,8 @@ def ensure_model_running(model_id, model_cfg, timeout=None):
                                 m.get("dedicated") and m.get("port") == p
                                 for m in get_models_snapshot().values())
                             if not is_other_dedicated:
-                                kill_process(info["pid"])
+                                swap_marks.append(p)
+                                drain_and_kill(p, info["pid"], model_id)
                                 break
                 wait_for_port_free(target_port)
 
@@ -336,13 +352,16 @@ def ensure_model_running(model_id, model_cfg, timeout=None):
                 _spawn_errors[model_id] = str(e)
                 raise
             finally:
+                for p in swap_marks:
+                    end_swap(p)
                 ev.set()
                 _spawn_inflight[model_id] = False
 
         worker = threading.Thread(target=_do_spawn, daemon=True,
                                   name=f"cold-start-{model_id}")
         worker.start()
-        if not ev.wait(timeout + 5):
+        from config import get_drain_timeout
+        if not ev.wait(timeout + get_drain_timeout() + 5):
             _spawn_errors[model_id] = "Cold start timed out"
 
     err = _spawn_error(model_id)
@@ -360,6 +379,20 @@ def ensure_model_running(model_id, model_cfg, timeout=None):
 def _is_windows():
     import sys
     return sys.platform.startswith("win")
+
+
+# Clients retry after this many seconds when a swap rejects their request
+SWAP_RETRY_AFTER_SECONDS = 5
+
+
+def _swap_rejection(handler, model_id):
+    """Reject a request whose model is being swapped out: 503 model_swapping + Retry-After."""
+    _openai_error(
+        handler, 503,
+        f"Model '{model_id}' is being swapped out for another model; retry shortly.",
+        etype="server_error", code="model_swapping",
+        headers={"Retry-After": str(SWAP_RETRY_AFTER_SECONDS)},
+    )
 
 
 def get_models_snapshot():
@@ -459,12 +492,29 @@ def handle_completion_proxy(handler, path, body):
                       code="model_not_found" if e.status == 404 else None)
         return
 
+    from process import is_swapped_out, try_begin_request, end_request, touch_model_activity
+    if is_swapped_out(_get_port_for_model(model_id, model_cfg), model_id):
+        _swap_rejection(handler, model_id)
+        return
+
     try:
         port = ensure_model_running(model_id, model_cfg)
     except ProxyError as e:
         _openai_error(handler, e.status, e.message, etype="server_error")
         return
 
+    # Counted for the whole upstream exchange so a swap can drain active streams
+    if not try_begin_request(port, model_id):
+        _swap_rejection(handler, model_id)
+        return
+    try:
+        _forward(handler, path, body, port, model_id)
+    finally:
+        end_request(port)
+        touch_model_activity(model_id, port)
+
+
+def _forward(handler, path, body, port, model_id):
     touch_activity_for_model(model_id)
 
     # ── Forward to upstream ──
@@ -509,7 +559,8 @@ def _pipe_response(handler, upstream_resp, conn):
 
     try:
         while True:
-            chunk = upstream_resp.read(4096)
+            # read1 returns what has arrived; read(4096) would hold SSE tokens until 4 KB piled up
+            chunk = upstream_resp.read1(4096)
             if not chunk:
                 break
             handler.wfile.write(chunk)

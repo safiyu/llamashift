@@ -38,7 +38,7 @@ services:
       - DISPLAY=:0                         # X11 display
     # Health check
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/api/config"]
+      test: ["CMD", "curl", "-f", "http://localhost:8002/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3

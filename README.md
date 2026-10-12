@@ -46,7 +46,7 @@ LlamaShift is a comprehensive LLM model management platform that enables users t
 ```
 ┌─────────────────┐    ┌───────────────────────┐    ┌─────────────────┐
 │   Web UI         │    │    LlamaShift         │    │   LLM Models    │
-│  (Port 8002)     │───▶│   (server.py)         │───▶│  (llama-server) │
+│  (Port 8002)     │───▶│   (main.py)           │───▶│  (llama-server) │
 └─────────────────┘    │                       │    └─────────────────┘
                        │  ┌───────────────────┐│
                        │  │   MCP Server      ││
@@ -192,12 +192,40 @@ sudo bash install_service.sh     # Creates systemd service
 | `dataDir` | string | **Yes** | Directory containing GGUF model files |
 | `mode` | string | No | `"single_port"` or `"multi_port"` — see [Port Assignment](#port-assignment) |
 | `coldStartTimeoutSeconds` | int | No | Max seconds to wait for a gateway cold-start (default: `120`) |
-| `idleTimeoutMinutes` | int | No | Idle auto-unload threshold in minutes (default: `20`) |
+| `idleTimeoutSeconds` | int | No | Unload a model after this many idle seconds. `0` (default) turns the idle reaper off; it replaces the old `idleTimeoutMinutes` |
+| `idleReapDedicated` | bool | No | Let the idle reaper also unload `dedicated` models (default: `false`) |
+| `drainTimeoutSeconds` | int | No | Seconds a model swap waits for in-flight gateway requests before stopping the old model (default: `60`) |
+| `strictVram` | bool | No | Refuse a start when the VRAM estimate does not fit (default: `false`, warnings only) |
+| `managementApiKey` | string | No | If set, `/api/*` requires `Authorization: Bearer <key>` or `X-API-Key` (or a valid PIN session) |
+| `wsPort` / `mcpPort` | int | No | WebSocket telemetry port (default `28002`) and MCP server port (default `28003`); the `WS_PORT` and `MCP_PORT` env vars override them |
 | `autoSpawnEnabled` | bool | No | Reserved: gateway on-demand auto-start toggle |
 | `openAiApiKey` | string | No | If set, the `/v1/*` gateway requires `Authorization: Bearer <key>` (see [Unified OpenAI Gateway](#unified-openai-gateway)) |
 | `models` | object | **Yes** | Model definitions (see below) |
 
-> **Status note:** `coldStartTimeoutSeconds` is active — the gateway uses it when it auto-starts a model on demand. `idleTimeoutMinutes` and `autoSpawnEnabled` are read by the idle-reaper in `process.py`, but **the reaper is not started at boot yet**, so idle auto-unload is dormant until `start_idle_reaper()` is wired into startup.
+> **Status note:** `coldStartTimeoutSeconds` is active: the gateway uses it when it auto-starts a model on demand. The idle reaper starts at boot only when `idleTimeoutSeconds` is greater than `0`; it never unloads `dedicated` models unless `idleReapDedicated` is `true`, and it skips a model that still has gateway requests in flight.
+
+### Entrypoints and ports
+
+`python main.py` and `python server.py` run the same server. `server.py` is a thin shim over `main.py`, so systemd, launchd, Task Scheduler, Docker and manual starts all serve the same API, including `/v1/*` and `/api/vram/estimate`.
+
+| Port | Service | Change with |
+|------|---------|-------------|
+| `8002` | Dashboard, `/api/*` and the `/v1/*` OpenAI gateway | `serverPort` |
+| `28002` | WebSocket telemetry | `WS_PORT` env or `wsPort` |
+| `28003` | MCP server (SSE) | `MCP_PORT` env or `mcpPort` |
+| `masterPort` and model ports | `llama-server` processes | see [Port Assignment](#port-assignment) |
+
+If MCP cannot start (for example its port is taken) the server logs a clear error with the last lines of `mcp.log` instead of failing silently.
+
+### Starting a model: validation, VRAM and drain
+
+- `POST /api/start` validates the binary and model file before it stops anything, so a bad request never kills the running model.
+- **VRAM check:** the estimate from `vram.py` is compared with free VRAM plus the VRAM of the models that will be stopped. The success response always carries a `warnings` array. With `strictVram: true` a start that does not fit is refused with `409` unless the request body has `"force": true`. If telemetry or the estimate fails, the start is never blocked.
+- **Drain:** a swap that stops a running model first waits up to `drainTimeoutSeconds` for in-flight gateway requests on that port (streams included). While it waits and while the new model loads, new gateway requests for the old model get `503` with `error.code = "model_swapping"` and `Retry-After: 5`; requests for the incoming model wait for it as usual. If the timeout expires the swap proceeds and a line is logged. Only requests sent through the `/v1` gateway are tracked, not clients that talk to a model port directly.
+
+### Securing the management API
+
+Set `managementApiKey` to require a key on every `/api/*` route except `/api/health`, `/api/pin` and `/api/pin/status`. Send it as `Authorization: Bearer <key>` or `X-API-Key: <key>`. A valid `X-Pin-Session` (from the PIN login) is also accepted, and the dashboard sends it automatically, so set a PIN to keep using the dashboard. The spawned MCP server uses the key as its `MCP_AUTH_TOKEN` unless you set that yourself. With no key set, behavior is unchanged.
 
 ### Model Entry
 
@@ -309,6 +337,7 @@ The gateway (`proxy.py`):
 - **Routes by model name** — `resolve_target_model()` maps the request's `model` field to your config.
 - **Cold-starts on demand** — if the requested model is stopped, it launches it, waits for health (bounded by `coldStartTimeoutSeconds`), then forwards the request. A per-model lock prevents two requests from double-spawning it.
 - **Streams responses** — SSE token streaming is piped through, not buffered.
+- **Drains before swapping**: a swap waits for active requests on the old model (see [Starting a model](#starting-a-model-validation-vram-and-drain)).
 - **Bounds payloads** — `/v1/*` request bodies over 64 MB are rejected (`413`); malformed `Content-Length` is rejected (`400`).
 
 Supported paths: `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings`, `POST /v1/tokenize`, `POST /v1/untokenize`, `POST /v1/pass-through` (and the `/v1`-less forms for completions/embeddings).
@@ -338,8 +367,8 @@ The gateway works on top of whichever port model you choose above — it does **
 |--------|----------|-------------|
 | **GET** | `/` | Web UI dashboard |
 | **GET** | `/api/health` | Liveness check (`ok` / `starting`) |
-| **GET** | `/api/status` | System status + running models + host stats |
-| **GET** | `/api/active` | Only running models, with effective port + endpoint |
+| **GET** | `/api/status` | System status + running models + host stats; includes `masterPort` and each model's `effectivePort` |
+| **GET** | `/api/active` | Only running models, with the effective port and endpoint (`{"active": [...]}`) |
 | **GET** | `/api/config` | Current configuration + runtime env |
 | **POST** | `/api/config` | Update mode (`single_port` / `multi_port`) |
 | **GET** | `/api/devices` | Available inference devices (CUDA / ROCm / CPU) |
@@ -364,7 +393,7 @@ The gateway works on top of whichever port model you choose above — it does **
 | **DELETE** | `/api/models?model=ID` | Delete a model |
 | **GET** | `/api/models/export` | Export model configs |
 | **GET** | `/api/models/import` | Import model configs |
-| **POST** | `/api/start` | Start a model |
+| **POST** | `/api/start` | Start a model (`{model, force?}`); response includes `warnings`, `409` on a strict VRAM refusal |
 | **POST** | `/api/stop` | Stop a model |
 | **POST** | `/api/start_all` | Start all models |
 | **POST** | `/api/stop_all` | Stop all running models |
@@ -389,7 +418,8 @@ llama-switcher/
 ├── install_windows_gui.ps1    # Windows GUI installer (PowerShell wizard)
 ├── install_windows.bat        # Windows batch launcher (auto-elevates)
 ├── install_service.sh         # Legacy: direct systemd service installer
-├── server.py                  # Main backend server (cross-platform)
+├── main.py                    # Server entrypoint (HTTP, gateway, WebSocket, MCP)
+├── server.py                  # Compatibility shim: runs main.py
 ├── mcp_server.py              # MCP server for AI agent integration
 ├── config.json                # Model configuration (auto-generated)
 ├── requirements.txt           # Python dependencies
@@ -783,7 +813,7 @@ python3 server.py
 
 ```
 llama-switcher/
-├── server.py              # Main Flask server + all API routes
+├── main.py                # Entrypoint; api.py holds the API routes; server.py is a shim
 ├── mcp_server.py          # MCP (Model Context Protocol) server
 ├── config.json            # Runtime configuration
 ├── requirements.txt       # Python dependencies

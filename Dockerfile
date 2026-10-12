@@ -19,20 +19,19 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
 
 # Copy application files
-COPY server.py .
-COPY mcp_server.py .
-COPY config.json .
+COPY *.py ./
+COPY config.json* ./
 COPY static/ ./static/
 
 # Create logs directory
 RUN mkdir -p /root/logs/llamashift
 
 # Expose the backend API port
-EXPOSE 8002
+EXPOSE 8002 28002 28003
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8002/api/config || exit 1
+    CMD curl -f http://localhost:8002/api/health || exit 1
 
 # Run the server
 CMD ["python", "server.py"]

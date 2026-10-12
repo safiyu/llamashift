@@ -130,17 +130,21 @@ def detect_environment():
     
     if system == "windows":
         return "windows"
-    
+
+    if system == "darwin":
+        return "macos"
+
     return "linux"  # fallback
 
 
 RUNTIME_ENV = detect_environment()
 IS_WINDOWS = RUNTIME_ENV == "windows"
 IS_LINUX = RUNTIME_ENV.startswith("linux")
+IS_MACOS = RUNTIME_ENV == "macos"
 IS_DOCKER = RUNTIME_ENV == "docker"
 HAS_SYSTEMD = RUNTIME_ENV == "linux-systemd"
 
-print(f"[env] Runtime: {RUNTIME_ENV} (systemd={HAS_SYSTEMD}, docker={IS_DOCKER}, windows={IS_WINDOWS})")
+print(f"[env] Runtime: {RUNTIME_ENV} (systemd={HAS_SYSTEMD}, docker={IS_DOCKER}, windows={IS_WINDOWS}, macos={IS_MACOS})")
 
 
 # ─── Config Management ─────────────────────────────────────────────────────
@@ -148,6 +152,45 @@ def get_server_port():
     """Get the server port from config, with default fallback."""
     config = load_config()
     return config.get(SERVER_PORT_KEY, 8002)
+
+
+def _port_setting(env_name, config_key, default):
+    """Port from env var first, then config.json, else default; invalid values fall back."""
+    raw = os.environ.get(env_name)
+    if raw is None and _CONFIG is not None:
+        raw = _CONFIG.get(config_key)
+    if raw is None:
+        return default
+    try:
+        port = int(raw)
+        if 1 <= port <= 65535:
+            return port
+    except (TypeError, ValueError):
+        pass
+    print(f"[config] Ignoring invalid {env_name}/{config_key} value {raw!r}, using {default}")
+    return default
+
+
+DEFAULT_WS_PORT = 28002
+DEFAULT_MCP_PORT = 28003
+
+
+def get_ws_port():
+    """WebSocket telemetry port: WS_PORT env, then config wsPort, default 28002."""
+    return _port_setting("WS_PORT", "wsPort", DEFAULT_WS_PORT)
+
+
+def get_mcp_port():
+    """MCP server port: MCP_PORT env, then config mcpPort, default 28003."""
+    return _port_setting("MCP_PORT", "mcpPort", DEFAULT_MCP_PORT)
+
+
+def get_drain_timeout():
+    """Seconds a model swap waits for in-flight gateway requests (config drainTimeoutSeconds)."""
+    try:
+        return max(0.0, float((_CONFIG or {}).get("drainTimeoutSeconds", 60)))
+    except (TypeError, ValueError):
+        return 60.0
 
 
 CONFIG_TEMPLATE = "config.json.template"
@@ -199,13 +242,19 @@ def reload_config():
     _ensure_log_dir()
 
 
+def invalidate_models_cache():
+    """Drop the cached model registry; safe to call while holding _models_lock."""
+    global _models_cache
+    _models_cache = None
+
+
 def save_mode(mode):
     """Update only the mode field and persist."""
     global _CONFIG
     _CONFIG["mode"] = mode
     save_config(_CONFIG)
     with _models_lock:
-        _models_cache = None  # invalidate cache
+        invalidate_models_cache()
 
 
 # ─── Model Management ──────────────────────────────────────────────────────
