@@ -255,6 +255,7 @@ _TELEMETRY_INTERVAL = 2.0
 
 async def _ws_broadcast(data: dict):
     """Broadcast telemetry data to all connected WebSocket clients."""
+    global _ws_clients
     if not _ws_clients:
         return
     message = json.dumps(data)
@@ -295,7 +296,7 @@ def _get_status_snapshot() -> dict:
         is_running = False
         pid = None
 
-        if mode == "single_port":
+        if mode == "single_port" and not config.get("dedicated"):
             master_port = _CONFIG.get("masterPort", 9000)
             current_pid = running.get(master_port, {}).get("pid")
             
@@ -388,9 +389,11 @@ _models_lock = threading.Lock()
 
 def get_models():
     """Return the models dict from config, with logPath derived at runtime."""
-    global _models_cache
+    global _models_cache, _CONFIG
     with _models_lock:
         if _models_cache is None:
+            if _CONFIG is None:
+                _CONFIG = load_config()
             raw = _CONFIG.get("models", {})
             cache = {}
             for mid, cfg in raw.items():
@@ -408,10 +411,18 @@ class _ModelsProxy:
         return get_models()[key]
     def __contains__(self, key):
         return key in get_models()
+    def __iter__(self):
+        return iter(get_models())
+    def __len__(self):
+        return len(get_models())
+    def get(self, key, default=None):
+        return get_models().get(key, default)
     def items(self):
         return get_models().items()
     def keys(self):
         return get_models().keys()
+    def values(self):
+        return get_models().values()
 
 MODELS = _ModelsProxy()
 
@@ -432,6 +443,47 @@ def save_mode(mode):
     save_config(_CONFIG)
     with _models_lock:
         _models_cache = None  # invalidate cache
+
+
+# ─── Config File Watcher ──────────────────────────────────────────────────
+_config_mtime = 0.0
+_config_watcher_thread = None
+_config_watcher_stop = threading.Event()
+CONFIG_WATCH_INTERVAL = 3.0  # seconds between polls
+
+def _config_watcher_loop():
+    """Background thread that watches config.json for changes and auto-reloads."""
+    global _config_mtime
+    while not _config_watcher_stop.is_set():
+        try:
+            if os.path.exists(CONFIG_FILE):
+                current_mtime = os.path.getmtime(CONFIG_FILE)
+                if current_mtime != _config_mtime:
+                    _config_mtime = current_mtime
+                    print(f"[config] File changed — auto-reloading config...")
+                    try:
+                        reload_config()
+                    except Exception as e:
+                        print(f"[config] Auto-reload failed: {e}")
+        except Exception as e:
+            print(f"[config] Watcher error: {e}")
+        _config_watcher_stop.wait(CONFIG_WATCH_INTERVAL)
+
+def start_config_watcher():
+    """Start the background config file watcher thread."""
+    global _config_watcher_thread, _config_mtime
+    if _config_watcher_thread is not None and _config_watcher_thread.is_alive():
+        return
+    if os.path.exists(CONFIG_FILE):
+        _config_mtime = os.path.getmtime(CONFIG_FILE)
+    _config_watcher_stop.clear()
+    _config_watcher_thread = threading.Thread(
+        target=_config_watcher_loop, daemon=True, name="config-watcher"
+    )
+    _config_watcher_thread.start()
+    print(f"[config] Auto-reload watcher started (polling every {CONFIG_WATCH_INTERVAL}s)")
+
+start_config_watcher()
 
 
 # ─── Cross-Platform Process Detection ──────────────────────────────────────
@@ -505,6 +557,22 @@ def get_running_servers():
                     except ValueError:
                         pass
     return running
+
+
+def get_process_env(binary_path):
+    """Return an execution environment with appropriate LD_LIBRARY_PATH for the given binary.
+
+    Prevents dynamic library collisions between ROCm and CUDA builds of llama-server.
+    """
+    proc_env = dict(os.environ)
+    if not binary_path:
+        return proc_env
+    bin_dir = os.path.dirname(os.path.abspath(binary_path))
+    old_ld = proc_env.get("LD_LIBRARY_PATH", "")
+    # Strip any competing llama.cpp build dirs so ROCm and CUDA builds don't cross-link
+    ld_parts = [p for p in old_ld.split(":") if p and not ("llama.cpp" in p and p != bin_dir)]
+    proc_env["LD_LIBRARY_PATH"] = ":".join([bin_dir] + ld_parts)
+    return proc_env
 
 
 # ─── Cross-Platform Process Stats ──────────────────────────────────────────
@@ -775,6 +843,68 @@ def get_host_stats():
     }
 
 
+_nvml_lib = None
+_nvml_initialized = False
+
+
+def _get_nvidia_power_fallback():
+    """Fallback power reader for NVIDIA GPUs when power.draw reports N/A (e.g. RTX 40-series)."""
+    global _nvml_lib, _nvml_initialized
+    try:
+        import ctypes
+        import ctypes.util
+        if _nvml_lib is None:
+            lib_name = ctypes.util.find_library('nvidia-ml') or 'libnvidia-ml.so.1' or 'libnvidia-ml.so'
+            if lib_name:
+                _nvml_lib = ctypes.CDLL(lib_name)
+        if _nvml_lib:
+            if not _nvml_initialized:
+                if _nvml_lib.nvmlInit() == 0:
+                    _nvml_initialized = True
+            if _nvml_initialized:
+                dev = ctypes.c_void_p()
+                if _nvml_lib.nvmlDeviceGetHandleByIndex(0, ctypes.byref(dev)) == 0:
+                    p_mw = ctypes.c_uint()
+                    if _nvml_lib.nvmlDeviceGetPowerUsage(dev, ctypes.byref(p_mw)) == 0 and p_mw.value > 0:
+                        return round(p_mw.value / 1000.0, 1)
+
+                    class _NvmlVal(ctypes.Union):
+                        _fields_ = [
+                            ('dVal', ctypes.c_double),
+                            ('uiVal', ctypes.c_uint),
+                            ('ulVal', ctypes.c_ulong),
+                            ('ullVal', ctypes.c_ulonglong),
+                            ('sval', ctypes.c_char * 8),
+                        ]
+                    class _NvmlSample(ctypes.Structure):
+                        _fields_ = [
+                            ('timeStamp', ctypes.c_ulonglong),
+                            ('sampleValue', _NvmlVal)
+                        ]
+                    cnt = ctypes.c_uint(5)
+                    samples = (_NvmlSample * 5)()
+                    stype = ctypes.c_uint()
+                    if _nvml_lib.nvmlDeviceGetSamples(dev, 0, 0, ctypes.byref(stype), ctypes.byref(cnt), samples) == 0 and cnt.value > 0:
+                        latest = samples[cnt.value - 1]
+                        if stype.value == 1 and latest.sampleValue.uiVal > 0:
+                            return round(latest.sampleValue.uiVal / 1000.0, 1)
+                        elif stype.value == 0 and latest.sampleValue.dVal > 0:
+                            return round(latest.sampleValue.dVal, 1)
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run(['nvidia-smi', '-q', '-d', 'POWER'], capture_output=True, text=True, timeout=3)
+        if res.returncode == 0 and res.stdout:
+            m = re.search(r'Power Samples.*?Avg\s*:\s*([\d\.]+)\s*W', res.stdout, re.DOTALL)
+            if m:
+                return float(m.group(1))
+    except Exception:
+        pass
+
+    return 0.0
+
+
 def get_gpu_telemetry():
     """Gathers real-time GPU statistics for NVIDIA and AMD."""
     nvidia_data = None
@@ -789,15 +919,18 @@ def get_gpu_telemetry():
         ], capture_output=True, text=True, timeout=10)
         if res.returncode == 0 and res.stdout.strip():
             parts = [p.strip() for p in res.stdout.splitlines()[0].split(",")]
-            if len(parts) >= 6:
-                power_str = parts[5]
+            if len(parts) >= 5:
                 power_val = 0.0
-                if not power_str.startswith("[") and "N/A" not in power_str:
-                    try:
-                        power_val = float(power_str)
-                    except ValueError:
-                        pass
-                
+                if len(parts) >= 6:
+                    power_str = parts[5]
+                    if not power_str.startswith("[") and "N/A" not in power_str:
+                        try:
+                            power_val = float(power_str)
+                        except ValueError:
+                            pass
+                if power_val <= 0.0:
+                    power_val = _get_nvidia_power_fallback()
+
                 nvidia_data = {
                     "name": parts[0],
                     "temp": float(parts[1]),
@@ -1444,6 +1577,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/health":
             self.handle_api_health()
+        elif path == "/api/active":
+            self.handle_api_active()
         elif path == "/api/status":
             self.handle_api_status()
         elif path == "/api/gpu":
@@ -1458,12 +1593,31 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             self.handle_api_models_import_post()
         elif path == "/api/models":
             self.handle_api_models()
+        elif path == "/api/pin" or path == "/api/pin/status":
+            self.handle_api_pin()
         elif path == "/api/mcp":
             self.handle_api_mcp_status()
         elif path == "/api/files":
             self.handle_api_files()
         else:
             self.serve_static(path)
+
+    def do_PUT(self):
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        
+        # Handle /api/models/{modelId}
+        if path.startswith("/api/models/"):
+            model_id = path[len("/api/models/"):]
+            if model_id:
+                content_length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(content_length).decode('utf-8')
+                data = json.loads(body)
+                self.handle_api_model_put(model_id, data)
+            else:
+                self.send_error_response(400, "Missing model id")
+        else:
+            self.send_error_response(404, "Endpoint not found")
 
     def do_PATCH(self):
         parsed_url = urllib.parse.urlparse(self.path)
@@ -1487,6 +1641,197 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             self.handle_api_model_delete(model_id)
         else:
             self.send_error_response(404, "Endpoint not found")
+
+    def handle_api_model_put(self, model_id, data):
+        """PUT /api/models/{modelId} - update model configuration (full config payload)."""
+        from config import MODELS, _CONFIG, save_config, _models_lock, _models_cache, get_global_mode
+        from process import (
+            get_running_servers, kill_process, _model_processes, _proc_lock,
+            _active_processes, _active_processes_lock, _log_handles, _log_lock
+        )
+        
+        if model_id not in MODELS:
+            self.send_error_response(400, f"Invalid or missing model id: {model_id}")
+            return
+        
+        updates = {}
+        allowed = {
+            "name", "desc", "filename", "port", "ctxSize", "nParallel",
+            "nGpuLayers", "batchSize", "threads", "temperature",
+            "maxTokens", "topP", "devices", "extraArgs", "mmproj",
+            "binaryPath", "gpu", "dedicated",
+        }
+        
+        for key, value in data.items():
+            if key in allowed and key != "id":
+                updates[key] = value
+        
+        if not updates:
+            self.send_error_response(400, "No valid fields to update")
+            return
+        
+        # Validate port uniqueness if port is being changed
+        if "port" in updates:
+            new_port = int(updates["port"])
+            for existing_id, existing_cfg in MODELS.items():
+                if existing_id != model_id and existing_cfg.get("port") == new_port:
+                    self.send_error_response(409, f"Port {new_port} is already assigned to model '{existing_id}'")
+                    return
+        
+        runtime_params = {"ctxSize", "nParallel", "nGpuLayers", "batchSize", "threads",
+                          "extraArgs", "devices", "mmproj", "port", "filename", "binaryPath"}
+        requires_restart = bool(runtime_params & set(updates.keys()))
+        
+        was_running = False
+        if requires_restart:
+            running = get_running_servers()
+            mode = get_global_mode()
+            old_model_cfg = MODELS[model_id]
+            old_port = old_model_cfg.get("port")
+            
+            if mode == "multi_port" and old_port and old_port in running:
+                was_running = True
+            elif mode == "single_port":
+                from process import _cleanup_stale_tracked_processes, is_llama_server
+                _cleanup_stale_tracked_processes()
+                with _proc_lock:
+                    for mid, proc in list(_model_processes.items()):
+                        if mid == model_id and is_llama_server(proc.pid):
+                            was_running = True
+                            break
+        
+        with _models_lock:
+            _CONFIG["models"][model_id].update(updates)
+            _models_cache = None
+        save_config(_CONFIG)
+        
+        response_data = {
+            "success": True,
+            "model": model_id,
+            "updated": updates,
+            "config": dict(_CONFIG["models"][model_id]),
+        }
+        
+        if was_running and requires_restart:
+            def restart_model_after_put():
+                time.sleep(0.5)
+                try:
+                    running = get_running_servers()
+                    mode = get_global_mode()
+                    new_model_cfg = MODELS[model_id]
+                    new_port = new_model_cfg.get("port")
+                    
+                    if mode == "multi_port" and new_port and new_port in running:
+                        pid = running[new_port]["pid"]
+                        kill_process(pid)
+                        with _log_lock:
+                            handle = _log_handles.pop(model_id, None)
+                            if handle:
+                                try:
+                                    handle.close()
+                                except OSError:
+                                    pass
+                        with _proc_lock:
+                            _model_processes.pop(model_id, None)
+                            with _active_processes_lock:
+                                _active_processes.discard(model_id)
+                    elif mode == "single_port":
+                        from process import _cleanup_stale_tracked_processes, is_llama_server
+                        _cleanup_stale_tracked_processes()
+                        master_port = _CONFIG.get("masterPort", 9000)
+                        if master_port in running:
+                            pid = running[master_port]["pid"]
+                            kill_process(pid)
+                            with _proc_lock:
+                                for mid2, proc in list(_model_processes.items()):
+                                    try:
+                                        if proc.pid == pid:
+                                            _model_processes.pop(mid2, None)
+                                            with _active_processes_lock:
+                                                _active_processes.discard(mid2)
+                                            break
+                                    except:
+                                        pass
+                                with _log_lock:
+                                    handle = _log_handles.pop(model_id, None)
+                                    if handle:
+                                        try:
+                                            handle.close()
+                                        except OSError:
+                                            pass
+                    
+                    port = new_port if mode == "multi_port" else _CONFIG.get("masterPort", 9000)
+                    
+                    import socket
+                    for _wait_attempt in range(20):
+                        time.sleep(0.5)
+                        _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        try:
+                            _sock.settimeout(1)
+                            _result = _sock.connect_ex(('127.0.0.1', int(port)))
+                            if _result != 0:
+                                break
+                        finally:
+                            _sock.close()
+                    
+                    binary_path = new_model_cfg.get("binaryPath") or _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
+                    data_dir = _CONFIG.get("dataDir", "~/models")
+                    model_path = os.path.join(os.path.expanduser(data_dir), new_model_cfg["filename"])
+                    
+                    n_parallel = new_model_cfg.get("nParallel", 1)
+                    n_gpu_layers = new_model_cfg.get("nGpuLayers", DEFAULT_RUNTIME_PARAMS["nGpuLayers"])
+                    devices_list = new_model_cfg.get("devices", ["ROCm0"])
+                    device_str = ",".join(devices_list)
+                    
+                    cmd_args = [
+                        binary_path,
+                        "--model", model_path,
+                        "--device", device_str,
+                        "-ngl", str(n_gpu_layers),
+                        "--ctx-size", str(new_model_cfg["ctxSize"]),
+                        "-np", str(n_parallel),
+                        "--port", str(port),
+                        "--host", "0.0.0.0"
+                    ]
+                    
+                    if "mmproj" in new_model_cfg:
+                        mmproj_path = os.path.join(os.path.expanduser(data_dir), new_model_cfg["mmproj"])
+                        cmd_args.extend(["--mmproj", mmproj_path])
+                    
+                    if "extraArgs" in new_model_cfg:
+                        cmd_args.extend(new_model_cfg["extraArgs"])
+                    
+                    log_file = open(new_model_cfg["logPath"], "w", buffering=1)
+                    with _log_lock:
+                        _log_handles[model_id] = log_file
+                    
+                    proc_kwargs = {
+                        "stdout": log_file,
+                        "stderr": subprocess.STDOUT,
+                        "env": get_process_env(binary_path),
+                    }
+                    if not IS_WINDOWS:
+                        proc_kwargs["start_new_session"] = True
+                    
+                    proc = subprocess.Popen(cmd_args, **proc_kwargs)
+                    with _proc_lock:
+                        _model_processes[model_id] = proc
+                        with _active_processes_lock:
+                            _active_processes.add(model_id)
+                    
+                    print(f"[put_restart] Model {model_id} restarted with new config")
+                except Exception as e:
+                    print(f"[put_restart] Failed to restart model {model_id}: {e}")
+                    with _log_lock:
+                        _log_handles.pop(model_id, None)
+                    with _proc_lock:
+                        _model_processes.pop(model_id, None)
+            
+            threading.Thread(target=restart_model_after_put, daemon=True).start()
+            response_data["restarted"] = True
+            response_data["message"] = "Configuration saved. Model is restarting with new settings."
+        
+        self.send_json_response(response_data)
 
     def do_POST(self):
         parsed_url = urllib.parse.urlparse(self.path)
@@ -1520,6 +1865,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.handle_api_restart()
             elif path == "/api/pin":
                 self.handle_api_pin(data)
+            elif path == "/api/admin/reset-pin":
+                self.handle_api_admin_reset_pin()
             elif path == "/api/models":
                 self.handle_api_models_post(data)
         else:
@@ -1630,6 +1977,75 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 "message": f"Mode switched from {old_mode} to {new_mode}"
             })
 
+    def handle_api_active(self):
+        """GET /api/active - return only currently running models with their endpoints.
+
+        Designed for external apps (e.g. IDE extensions, scripts, companion UIs) to
+        discover which models are live and which endpoint to route requests to.
+
+        Response shape:
+        {
+            "active": [
+                {
+                    "id": "qwen36",
+                    "name": "Qwen 3.6 35B A3B Vision",
+                    "gpu": "AMD R9700",
+                    "port": 9000,
+                    "endpoint": "http://localhost:9000/v1",
+                    "dedicated": false,
+                    "pid": 13427,
+                    "uptime": "00:05"
+                },
+                ...
+            ]
+        }
+        """
+        mode = get_global_mode()
+        _cleanup_stale_tracked_processes()
+        running = get_running_servers()
+
+        active = []
+        for model_id, config in MODELS.items():
+            port = config["port"]
+            is_running = False
+            pid = None
+
+            if mode == "single_port" and not config.get("dedicated"):
+                master_port = _CONFIG.get("masterPort", 9000)
+                current_pid = running.get(master_port, {}).get("pid")
+                if current_pid:
+                    cmdline = get_process_cmdline(current_pid)
+                    filename = config.get("filename", "")
+                    if filename and filename in cmdline:
+                        is_running = True
+                        pid = current_pid
+            else:
+                if port in running:
+                    candidate_pid = running[port]["pid"]
+                    cmdline = get_process_cmdline(candidate_pid)
+                    is_running = _process_matches_model(cmdline, config, model_id)
+                    pid = candidate_pid if is_running else None
+
+            if not is_running:
+                continue
+
+            stats = get_process_stats(pid)
+            active.append({
+                "id":        model_id,
+                "name":      config.get("name", model_id),
+                "gpu":       config.get("gpu", ""),
+                "devices":   config.get("devices", []),
+                "port":      port,
+                "endpoint":  config.get("endpoint", f"http://localhost:{port}/v1"),
+                "dedicated": config.get("dedicated", False),
+                "pid":       pid,
+                "cpu":       stats["cpu"],
+                "memory":    stats["mem"],
+                "uptime":    stats["uptime"],
+            })
+
+        self.send_json_response({"active": active})
+
     def handle_api_status(self):
         mode = get_global_mode()
 
@@ -1646,7 +2062,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             is_running = False
             pid = None
 
-            if mode == "single_port":
+            if mode == "single_port" and not config.get("dedicated"):
                 master_port = _CONFIG.get("masterPort", 9000)
                 current_pid = running.get(master_port, {}).get("pid")
                 
@@ -1794,30 +2210,54 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         if mode == "single_port":
             master_port = _CONFIG.get("masterPort", 9000)
+            is_dedicated = target_model.get("dedicated", False)
+            target_port = target_model.get("port", master_port) if is_dedicated else master_port
             
-            # Step 1: Kill any existing llama-server process regardless of which model spawned it
             _cleanup_stale_tracked_processes()
             running = get_running_servers()
             
-            # Step 1: Kill ALL running llama-server processes regardless of port
-            # In single-port mode, only ONE model should ever run at a time,
-            # even if models are configured on different ports or devices
-            for _port, _info in list(running.items()):
-                existing_pid = _info["pid"]
-                if kill_process(existing_pid):
-                    with _proc_lock:
-                        for mid, p in list(_model_processes.items()):
-                            try:
-                                if p.pid == existing_pid:
-                                    if mid not in stopped_some:
-                                        stopped_some.append(mid)
-                                    _model_processes.pop(mid, None)
-                            except:
-                                pass
+            if is_dedicated:
+                # Dedicated model (e.g. secondary GPU): only stop process on target_port
+                if target_port in running:
+                    existing_pid = running[target_port]["pid"]
+                    if kill_process(existing_pid):
+                        with _proc_lock:
+                            for mid, p in list(_model_processes.items()):
+                                try:
+                                    if p.pid == existing_pid:
+                                        if mid not in stopped_some:
+                                            stopped_some.append(mid)
+                                        _model_processes.pop(mid, None)
+                                except:
+                                    pass
+                ports_to_wait = [target_port]
+            else:
+                # Switched model on master_port:
+                # Stop processes on master_port or other non-dedicated models, preserving dedicated models
+                for _port, _info in list(running.items()):
+                    is_other_dedicated = False
+                    for mid, mcfg in MODELS.items():
+                        if mcfg.get("dedicated") and mcfg.get("port") == _port:
+                            is_other_dedicated = True
+                            break
+                    if is_other_dedicated:
+                        continue  # preserve dedicated models on other GPUs
+                    
+                    existing_pid = _info["pid"]
+                    if kill_process(existing_pid):
+                        with _proc_lock:
+                            for mid, p in list(_model_processes.items()):
+                                try:
+                                    if p.pid == existing_pid:
+                                        if mid not in stopped_some:
+                                            stopped_some.append(mid)
+                                        _model_processes.pop(mid, None)
+                                except:
+                                    pass
+                ports_to_wait = [p for p in running.keys() if not any(m.get("dedicated") and m.get("port") == p for m in MODELS.values())]
             
-            # Step 2: Wait for all ports to be fully released
+            # Step 2: Wait for ports to be fully released
             import socket
-            ports_to_wait = list(running.keys())
             if ports_to_wait:
                 for _wait_attempt in range(40):  # Up to 20 seconds
                     time.sleep(0.5)
@@ -1834,18 +2274,23 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                     if all_free:
                         break
             
-            # Step 3: Clean up _model_processes and _log_handles completely
-            with _proc_lock:
-                _model_processes.clear()
-            with _log_lock:
-                for handle in _log_handles.values():
-                    try:
-                        handle.close()
-                    except OSError:
-                        pass
-                _log_handles.clear()
+            # Step 3: Clean up stopped model tracking
+            if not is_dedicated:
+                with _proc_lock:
+                    for mid in list(_model_processes.keys()):
+                        if not MODELS.get(mid, {}).get("dedicated"):
+                            _model_processes.pop(mid, None)
+                with _log_lock:
+                    for mid in list(_log_handles.keys()):
+                        if not MODELS.get(mid, {}).get("dedicated"):
+                            handle = _log_handles.pop(mid, None)
+                            if handle:
+                                try:
+                                    handle.close()
+                                except OSError:
+                                    pass
 
-            port = master_port
+            port = target_port
         else:
             # Multi-port mode: allow multiple models simultaneously.
             # Only stop another model if it is on the SAME port (should not happen),
@@ -1881,7 +2326,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 print(f"[start] Port {port} still in use after 10s, proceeding anyway")
 
         # Build command
-        binary_path = _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
+        binary_path = target_model.get("binaryPath") or _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
         data_dir = _CONFIG.get("dataDir", "~/models")
         model_path = os.path.join(os.path.expanduser(data_dir), target_model["filename"])
 
@@ -1941,6 +2386,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             proc_kwargs = {
                 "stdout": log_file,
                 "stderr": subprocess.STDOUT,
+                "env": get_process_env(binary_path),
             }
             if not IS_WINDOWS:
                 proc_kwargs["start_new_session"] = True
@@ -1996,10 +2442,22 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         running = get_running_servers()
 
         if mode == "single_port":
-            if not running:
-                self.send_json_response({"success": True, "message": "No model is currently running."})
-                return
-            pid = list(running.values())[0]["pid"]
+            if target_model.get("dedicated"):
+                port = target_model.get("port", 9000)
+                if port not in running:
+                    self.send_json_response({"success": True, "message": f"Model {model_id} was already stopped."})
+                    return
+                pid = running[port]["pid"]
+            else:
+                master_port = _CONFIG.get("masterPort", 9000)
+                if master_port in running:
+                    pid = running[master_port]["pid"]
+                else:
+                    non_ded_pids = [info["pid"] for p, info in running.items() if not any(m.get("dedicated") and m.get("port") == p for m in MODELS.values())]
+                    if not non_ded_pids:
+                        self.send_json_response({"success": True, "message": "No switched model is currently running."})
+                        return
+                    pid = non_ded_pids[0]
         else:
             port = target_model["port"]
             if port not in running:
@@ -2111,7 +2569,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             
             try:
                 # Reuse the same logic as handle_api_start but in a loop
-                binary_path = _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
+                binary_path = config.get("binaryPath") or _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
                 data_dir = _CONFIG.get("dataDir", "~/models")
                 model_path = os.path.join(os.path.expanduser(data_dir), config["filename"])
                 
@@ -2151,6 +2609,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                 proc_kwargs = {
                     "stdout": log_file,
                     "stderr": subprocess.STDOUT,
+                    "env": get_process_env(binary_path),
                 }
                 if not IS_WINDOWS:
                     proc_kwargs["start_new_session"] = True
@@ -2231,6 +2690,15 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         if data.get("mmproj"):
             new_model["mmproj"] = data["mmproj"]
 
+        if data.get("binaryPath"):
+            new_model["binaryPath"] = data["binaryPath"]
+        if data.get("gpu"):
+            new_model["gpu"] = data["gpu"]
+        if data.get("size"):
+            new_model["size"] = data["size"]
+        if data.get("dedicated") is not None:
+            new_model["dedicated"] = bool(data["dedicated"])
+
         with _models_lock:
             _CONFIG["models"][model_id] = new_model
             _models_cache = None
@@ -2288,7 +2756,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             "message": f"Model '{model_id}' deleted successfully"
         })
 
-    def handle_api_pin(self):
+    def handle_api_pin(self, data=None):
         """Handle PIN-related API requests.
         
         GET /api/pin/status - Check if PIN is set and verify session
@@ -2325,17 +2793,13 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             })
         
         elif self.command == 'POST':
+            # data was already parsed in do_POST
+            if data is None:
+                data = {}
+            
             # Check rate limiting for all POST PIN requests
             if _is_rate_limited(client_ip):
                 self.send_error_response(429, "Rate limit exceeded. Please try again later.")
-                return
-            
-            try:
-                content_length = int(self.headers.get('Content-Length', 0))
-                body = self.rfile.read(content_length).decode('utf-8')
-                data = json.loads(body)
-            except (json.JSONDecodeError, ValueError):
-                self.send_error_response(400, "Invalid JSON in request body")
                 return
             
             action = data.get("action", "")
@@ -2388,6 +2852,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json_response({
                         "success": True,
                         "sessionValid": True,
+                        "sessionToken": session_token,
                         "message": "PIN verified successfully"
                     })
                 else:
@@ -2444,9 +2909,127 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                         return
                 
                 self.send_error_response(401, "Invalid or expired session")
-            
+
+            elif action == "change":
+                # Change the existing PIN after verifying the current one
+                current_pin = data.get("currentPin", "")
+                new_pin = data.get("newPin", "")
+                if not current_pin or not new_pin:
+                    self.send_error_response(400, "Missing currentPin or newPin")
+                    return
+
+                if not isinstance(current_pin, str) or not isinstance(new_pin, str):
+                    self.send_error_response(400, "PIN values must be strings")
+                    return
+
+                if not current_pin.isdigit() or not new_pin.isdigit():
+                    self.send_error_response(400, "PIN must contain only digits")
+                    return
+
+                if len(current_pin) < 4 or len(current_pin) > 12 or len(new_pin) < 4 or len(new_pin) > 12:
+                    self.send_error_response(400, "PIN must be between 4 and 12 digits")
+                    return
+
+                pin_hash = _CONFIG.get("pinHash")
+                if not pin_hash:
+                    self.send_error_response(401, "No PIN is set")
+                    return
+
+                salt = _CONFIG.get("pinSalt", "")
+                current_hash = _hash_pin(current_pin, salt)
+                if current_hash != pin_hash:
+                    if _record_failed_attempt(client_ip, success=False):
+                        self.send_error_response(403, "Account locked due to too many failed attempts. Please try again later.")
+                    else:
+                        self.send_error_response(401, "Invalid current PIN")
+                    return
+
+                # Update the PIN with a new salt and hash
+                import secrets
+                new_salt = secrets.token_hex(16)
+                new_hash = _hash_pin(new_pin, new_salt)
+
+                with _config_lock:
+                    _CONFIG["pinHash"] = new_hash
+                    _CONFIG["pinSalt"] = new_salt
+                    _CONFIG["pinSetAt"] = int(time.time())
+
+                save_config(_CONFIG)
+                _pin_failed_attempts[client_ip] = []
+
+                self.send_json_response({
+                    "success": True,
+                    "message": "PIN changed successfully"
+                })
+
             else:
-                self.send_error_response(400, "Invalid action. Use 'verify', 'set', or 'verify-session'")
+                self.send_error_response(400, "Invalid action. Use 'verify', 'set', 'verify-session', or 'change'")
+    
+    def handle_api_admin_reset_pin(self):
+        """Reset the PIN to default (1234) - admin function.
+        
+        POST /api/admin/reset-pin
+        Expects: {"adminPassword": "current_admin_password"}
+        """
+        client_ip = self.client_address[0]
+        
+        # Check rate limiting
+        if _is_rate_limited(client_ip):
+            self.send_error_response(429, "Rate limit exceeded. Please try again later.")
+            return
+        
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8')
+            data = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self.send_error_response(400, "Invalid JSON in request body")
+            return
+        
+        admin_password = data.get("adminPassword")
+        if not admin_password:
+            self.send_error_response(400, "Missing adminPassword")
+            return
+        
+        # Verify admin password
+        stored_admin_hash = _CONFIG.get("adminPasswordHash")
+        stored_admin_salt = _CONFIG.get("adminPasswordSalt")
+        
+        if not stored_admin_hash or not stored_admin_salt:
+            self.send_error_response(401, "Admin authentication not configured")
+            return
+        
+        # Hash and compare admin password - need to check the implementation in security.py
+        # For now, we'll use the standard approach - hash the input with salt and compare
+        import hashlib
+        input_hash = hashlib.sha256(f"{stored_admin_salt}{admin_password}".encode()).hexdigest()
+        if input_hash != stored_admin_hash:
+            self.send_error_response(401, "Invalid admin password")
+            return
+        
+        # Reset PIN to default (1234)
+        default_pin = "1234"
+        new_salt = secrets.token_hex(16)
+        new_pin_hash = _hash_pin(default_pin, new_salt)
+        
+        # Update config
+        with _config_lock:
+            _CONFIG["pinHash"] = new_pin_hash
+            _CONFIG["pinSalt"] = new_salt
+            _CONFIG["pinSetAt"] = int(time.time())
+        
+        save_config(_CONFIG)
+        
+        # Log security event - fix the function call to match the signature
+        _log_security_event("PIN reset to default", {
+            "ip": client_ip,
+            "reset_by": "admin"
+        })
+        
+        self.send_json_response({
+            "success": True,
+            "message": "PIN reset to default (1234). Please change it immediately."
+        })
     
     def handle_api_models_export(self):
         """Export all model configurations as JSON."""
@@ -2521,6 +3104,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
             "ctxSize", "nParallel", "nGpuLayers", "temperature",
             "maxTokens", "topP", "batchSize", "threads", "extraArgs",
             "name", "desc", "devices", "mmproj", "port",
+            "binaryPath", "gpu", "dedicated",
         }
         filtered = {k: v for k, v in updates.items() if k in allowed}
         if not filtered:
@@ -2529,7 +3113,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         # Determine if this requires a restart (runtime-affecting params)
         runtime_params = {"ctxSize", "nParallel", "nGpuLayers", "batchSize", "threads",
-                          "extraArgs", "devices", "mmproj", "port", "filename"}
+                          "extraArgs", "devices", "mmproj", "port", "filename", "binaryPath"}
         requires_restart = bool(runtime_params & set(filtered.keys()))
 
         # Check if model is currently running BEFORE updating config
@@ -2631,7 +3215,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                         print(f"[patch_restart] Port {port} still in use after 10s, proceeding anyway")
 
                     # Start the model with new config
-                    binary_path = _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
+                    binary_path = new_model_cfg.get("binaryPath") or _CONFIG.get("binaryPath", "/home/safiyu/llama.cpp/build/bin/llama-server")
                     data_dir = _CONFIG.get("dataDir", "~/models")
                     model_path = os.path.join(os.path.expanduser(data_dir), new_model_cfg["filename"])
 
@@ -2665,6 +3249,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
                     proc_kwargs = {
                         "stdout": log_file,
                         "stderr": subprocess.STDOUT,
+                        "env": get_process_env(binary_path),
                     }
                     if not IS_WINDOWS:
                         proc_kwargs["start_new_session"] = True

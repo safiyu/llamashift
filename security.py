@@ -125,8 +125,14 @@ def _log_security_event(event_type, details):
     try:
         with _security_log_lock:
             if _security_log_file is None:
-                from config import LOG_DIR
-                security_log_path = os.path.join(LOG_DIR, "security.log")
+                import config as config_module
+                # Get LOG_DIR from config module, handle None case (e.g., CLI mode)
+                log_dir = config_module.LOG_DIR
+                if log_dir is None:
+                    # Use default logs directory
+                    log_dir = os.path.join(os.path.expanduser("~/logs"), "llamashift")
+                os.makedirs(log_dir, exist_ok=True)
+                security_log_path = os.path.join(log_dir, "security.log")
                 _security_log_file = open(security_log_path, "a", buffering=1)
             
             log_entry = {

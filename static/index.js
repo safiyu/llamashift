@@ -1,4 +1,3 @@
-
 // Default runtime parameters
 const DEFAULT_PARAMS = {
     ctxSize: 16384,
@@ -225,6 +224,23 @@ function initUI() {
     if (btnConfirmImport) {
         btnConfirmImport.addEventListener('click', handleImportModels);
     }
+
+    // Security PIN button
+    const btnPinSecurity = document.getElementById('btn-pin-security');
+    if (btnPinSecurity) {
+        btnPinSecurity.addEventListener('click', () => {
+            showInitialPinScreen();
+        });
+    }
+
+    // Change PIN button
+    const btnChangePin = document.getElementById('btn-change-pin');
+    if (btnChangePin) {
+        btnChangePin.addEventListener('click', () => {
+            console.log('[DEBUG] Change PIN button clicked');
+            showChangePinScreen();
+        });
+    }
 }
 
 /**
@@ -248,29 +264,99 @@ function openModal(modalId) {
 }
 
 /**
+ * Show a custom confirmation modal
+ */
+function showConfirmModal(message, onConfirm, onCancel) {
+    let modal = document.getElementById('confirm-modal-overlay');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'confirm-modal-overlay';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="config-modal" style="max-width: 440px; width: 90%;">
+                <div class="config-modal-header">
+                    <div class="config-modal-title">
+                        <i class="fa-solid fa-triangle-exclamation" style="color: var(--neon-glow);"></i>
+                        CONFIRM ACTION
+                    </div>
+                </div>
+                <div class="config-modal-body">
+                    <p id="confirm-modal-message" style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 24px; text-align: center;"></p>
+                    <div style="display: flex; justify-content: center; gap: 12px; margin-top: 8px;">
+                        <button id="confirm-modal-cancel" type="button" class="btn btn-secondary" style="min-width: 110px; padding: 8px 16px;">Cancel</button>
+                        <button id="confirm-modal-confirm" type="button" class="btn btn-start" style="min-width: 110px; padding: 8px 16px;">Confirm</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        
+        document.getElementById('confirm-modal-cancel').addEventListener('click', () => {
+            closeModal('confirm-modal-overlay');
+            if (modal._onCancel) modal._onCancel();
+        });
+        document.getElementById('confirm-modal-confirm').addEventListener('click', () => {
+            closeModal('confirm-modal-overlay');
+            if (modal._onConfirm) modal._onConfirm();
+        });
+    }
+    modal._onConfirm = onConfirm;
+    modal._onCancel = onCancel;
+    document.getElementById('confirm-modal-message').textContent = message;
+    openModal('confirm-modal-overlay');
+}
+
+/**
  * Handle creating a new model
  */
 async function handleCreateModel() {
-    const modelNameInput = document.getElementById('new-model-name');
-    const modelTypeSelect = document.getElementById('new-model-type');
-    const modelSizeInput = document.getElementById('new-model-size');
+    const idInput = document.getElementById('new-model-id');
+    const nameInput = document.getElementById('new-model-name');
+    const descInput = document.getElementById('new-model-desc');
+    const filenameInput = document.getElementById('new-model-filename');
+    const portInput = document.getElementById('new-model-port');
+    const ctxSizeInput = document.getElementById('new-model-ctxSize');
+    const nParallelInput = document.getElementById('new-model-nParallel');
+    const nGpuLayersInput = document.getElementById('new-model-nGpuLayers');
+    const batchSizeInput = document.getElementById('new-model-batchSize');
+    const deviceSelect = document.getElementById('new-model-device');
+    const binaryPathInput = document.getElementById('new-model-binaryPath');
+    const dedicatedInput = document.getElementById('new-model-dedicated');
 
-    if (!modelNameInput || !modelTypeSelect || !modelSizeInput) return;
+    const id = idInput ? idInput.value.trim() : '';
+    const name = nameInput ? nameInput.value.trim() : '';
+    const filename = filenameInput ? filenameInput.value.trim() : '';
 
-    const name = modelNameInput.value.trim();
-    const type = modelTypeSelect.value;
-    const size = modelSizeInput.value.trim();
-
-    if (!name || !size) {
-        showToast('Please fill in all required fields', 'error');
+    if (!id || !name || !filename) {
+        showToast('Please fill in Model ID, Name, and Filename', 'error');
         return;
+    }
+
+    const payload = {
+        id,
+        name,
+        desc: descInput ? descInput.value.trim() : '',
+        filename,
+        port: portInput ? parseInt(portInput.value) || 9000 : 9000,
+        ctxSize: ctxSizeInput ? parseInt(ctxSizeInput.value) || 16384 : 16384,
+        nParallel: nParallelInput ? parseInt(nParallelInput.value) || 1 : 1,
+        nGpuLayers: nGpuLayersInput ? parseInt(nGpuLayersInput.value) || 99 : 99,
+        batchSize: batchSizeInput ? parseInt(batchSizeInput.value) || 2048 : 2048,
+        devices: deviceSelect ? Array.from(deviceSelect.selectedOptions).map(o => o.value) : ['ROCm0']
+    };
+
+    if (binaryPathInput && binaryPathInput.value.trim()) {
+        payload.binaryPath = binaryPathInput.value.trim();
+    }
+    if (dedicatedInput) {
+        payload.dedicated = dedicatedInput.checked;
     }
 
     try {
         const response = await fetch('/api/models', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, type, size })
+            body: JSON.stringify(payload)
         });
 
         const result = await response.json();
@@ -278,8 +364,12 @@ async function handleCreateModel() {
         if (result.success) {
             showToast('Model created successfully!', 'success');
             closeModal('new-model-overlay');
-            modelNameInput.value = '';
-            modelSizeInput.value = '';
+            if (idInput) idInput.value = '';
+            if (nameInput) nameInput.value = '';
+            if (descInput) descInput.value = '';
+            if (filenameInput) filenameInput.value = '';
+            if (binaryPathInput) binaryPathInput.value = '';
+            if (dedicatedInput) dedicatedInput.checked = false;
             await fetchSystemState(true);
         } else {
             showToast(result.message || 'Failed to create model', 'error');
@@ -416,21 +506,42 @@ async function waitForServerToBeReady(maxWaitMs = 60000, pollIntervalMs = 1000) 
  * Handle starting all models
  */
 async function handleStartAll() {
-    if (!confirm('Start all stopped models?')) return;
+    showConfirmModal('Start all stopped models?', async () => {
+        try {
+            const response = await fetch('/api/start_all', { method: 'POST' });
+            const result = await response.json();
 
-    try {
-        const response = await fetch('/api/start_all', { method: 'POST' });
-        const result = await response.json();
-
-        if (result.success) {
-            showToast('All models starting...', 'success');
-            await fetchSystemState(true);
-        } else {
-            showToast(result.message || 'Failed to start all models', 'error');
+            if (result.success) {
+                showToast('All models starting...', 'success');
+                await fetchSystemState(true);
+            } else {
+                showToast(result.message || 'Failed to start all models', 'error');
+            }
+        } catch (error) {
+            showToast('Error starting models: ' + error.message, 'error');
         }
-    } catch (error) {
-        showToast('Error starting models: ' + error.message, 'error');
-    }
+    });
+}
+
+/**
+ * Handle stopping all models
+ */
+async function handleStopAll() {
+    showConfirmModal('Stop all running models?', async () => {
+        try {
+            const response = await fetch('/api/stop_all', { method: 'POST' });
+            const result = await response.json();
+
+            if (result.success) {
+                showToast('All models stopping...', 'success');
+                await fetchSystemState(true);
+            } else {
+                showToast(result.message || 'Failed to stop all models', 'error');
+            }
+        } catch (error) {
+            showToast('Error stopping models: ' + error.message, 'error');
+        }
+    });
 }
 
 /**
@@ -463,6 +574,10 @@ async function openModelEditConfig(modelId) {
     document.getElementById('config-maxTokens').value = model.maxTokens || 4096;
     document.getElementById('config-topP').value = model.topP || 0.9;
     document.getElementById('config-extraArgs').value = (model.extraArgs || []).join(' ');
+    const binInput = document.getElementById('config-binaryPath');
+    if (binInput) binInput.value = model.binaryPath || '';
+    const dedInput = document.getElementById('config-dedicated');
+    if (dedInput) dedInput.checked = !!model.dedicated;
 
     // Set device selections
     const deviceSelect = document.getElementById('config-device');
@@ -502,6 +617,15 @@ async function handleSaveConfig() {
         topP: parseFloat(document.getElementById('config-topP').value) || 0.9,
         extraArgs: document.getElementById('config-extraArgs').value.split(' ').filter(Boolean)
     };
+
+    const binInput = document.getElementById('config-binaryPath');
+    if (binInput && binInput.value.trim()) {
+        configData.binaryPath = binInput.value.trim();
+    }
+    const dedInput = document.getElementById('config-dedicated');
+    if (dedInput) {
+        configData.dedicated = dedInput.checked;
+    }
 
     // Get selected devices
     const deviceSelect = document.getElementById('config-device');
@@ -553,6 +677,11 @@ async function handleResetConfig() {
     document.getElementById('config-maxTokens').value = model.maxTokens || 4096;
     document.getElementById('config-topP').value = model.topP || 0.9;
     document.getElementById('config-extraArgs').value = (model.extraArgs || []).join(' ');
+
+    const binInputReset = document.getElementById('config-binaryPath');
+    if (binInputReset) binInputReset.value = model.binaryPath || '';
+    const dedInputReset = document.getElementById('config-dedicated');
+    if (dedInputReset) dedInputReset.checked = !!model.dedicated;
 
     const deviceSelect = document.getElementById('config-device');
     if (deviceSelect && model.devices) {
@@ -719,10 +848,9 @@ function updateCpuTile(host) {
         const loadPct = Math.min(100, (load / cpuCount) * 100);
         cpuValue.textContent = loadPct.toFixed(0);
 
-        // Update gauge ring rotation (0-270deg mapped from 0-100%)
+        // Update gauge arc (--pct 0-100 drives the 270° SVG arc length)
         if (cpuGaugeProgress) {
-            const rotation = (loadPct / 100) * 270;
-            cpuGaugeProgress.style.transform = `rotate(${rotation}deg)`;
+            cpuGaugeProgress.style.setProperty('--pct', loadPct);
         }
     }
 
@@ -771,10 +899,9 @@ function updateRamTile(host) {
     // Gauge value (percentage)
     if (ramValue) ramValue.textContent = memPct.toFixed(1);
 
-    // Gauge ring rotation (0-270deg mapped from 0-100%)
+    // Gauge arc (--pct 0-100 drives the 270° SVG arc length)
     if (ramGaugeProgress) {
-        const rotation = (memPct / 100) * 270;
-        ramGaugeProgress.style.transform = `rotate(${rotation}deg)`;
+        ramGaugeProgress.style.setProperty('--pct', memPct);
     }
 
     // Used bar
@@ -891,7 +1018,7 @@ function updateSingleGpuTile(tile, gpu) {
         <div class="tile-body">
             <div class="circular-gauge">
                 <div class="gauge-ring"></div>
-                <div class="gauge-ring-progress" style="transform: rotate(${(util / 100) * 270}deg);"></div>
+                <div class="gauge-ring-progress" style="--pct: ${Math.min(100, Math.max(0, util))}"><svg viewBox="0 0 100 100" aria-hidden="true"><path d="M 21.716 78.284 A 40 40 0 1 1 78.284 78.284" pathLength="100"></path></svg></div>
                 <div class="gauge-center">
                     <span class="gauge-value">${util.toFixed(0)}</span>
                     <span class="gauge-unit">UTIL</span>
@@ -1153,19 +1280,37 @@ async function toggleModel(modelId) {
     const model = appState.models.find(m => m.id === modelId);
     if (!model) return;
 
-    // Single port mode: check if another model is running and show confirmation modal
-    const isSinglePort = appState.serverMode === 'single_port';
-    const anyRunning = appState.models.some(m => m.status === 'running');
+    // Check if another model conflicts and show confirmation modal
+    if (model.status === 'stopped') {
+        const isSinglePort = appState.serverMode === 'single_port';
+        let conflictingModel = null;
 
-    if (model.status === 'stopped' && isSinglePort && anyRunning) {
-        const runningModel = appState.models.find(m => m.status === 'running');
-        const confirmMessage = document.getElementById('single-port-confirm-message');
-        if (confirmMessage) {
-            confirmMessage.innerHTML = `Starting <strong>${escapeHtml(model.name)}</strong> will stop the currently running model <strong>${escapeHtml(runningModel.name)}</strong>. Continue?`;
+        if (model.dedicated) {
+            // Dedicated model on separate port: only conflicts if another model runs on that exact port
+            conflictingModel = appState.models.find(m => 
+                m.id !== modelId && m.status === 'running' && m.port === model.port
+            );
+        } else if (isSinglePort) {
+            // Switched model in single-port mode: only conflicts with other non-dedicated running models
+            conflictingModel = appState.models.find(m => 
+                m.id !== modelId && m.status === 'running' && !m.dedicated
+            );
+        } else {
+            // Multi-port mode: only conflicts if another model uses the same port
+            conflictingModel = appState.models.find(m => 
+                m.id !== modelId && m.status === 'running' && m.port === model.port
+            );
         }
-        pendingModelId = modelId;
-        openModal('single-port-confirm-overlay');
-        return;
+
+        if (conflictingModel) {
+            const confirmMessage = document.getElementById('single-port-confirm-message');
+            if (confirmMessage) {
+                confirmMessage.innerHTML = `Starting <strong>${escapeHtml(model.name)}</strong> will stop the currently running model <strong>${escapeHtml(conflictingModel.name)}</strong>. Continue?`;
+            }
+            pendingModelId = modelId;
+            openModal('single-port-confirm-overlay');
+            return;
+        }
     }
 
     // Direct toggle (no confirmation needed)
@@ -1194,31 +1339,27 @@ async function executeModelToggle(modelId) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: modelId })
             });
-            const data = await res.json();
 
-            if (data.success) {
-                // Instantly open logs to watch compilation/server load!
-                openConsole(modelId);
-                // Trigger rapid updates for the next few seconds while spawning
-                let count = 0;
-                const quickPoll = setInterval(() => {
-                    fetchSystemState(false);
-                    count++;
-                    if (count > 5) clearInterval(quickPoll);
-                }, 1000);
-            } else {
-                showToast('Launch failed: ' + data.error, 'error');
-                fetchSystemState(true);
+            if (!res.ok) {
+                throw new Error(`Failed to start: ${res.statusText}`);
             }
+
+            await res.json();
+
+            // Open console on successful start
+            openConsole(modelId);
         } catch (err) {
-            showToast('API Network Error: ' + err.message, 'error');
-            fetchSystemState(true);
+            toggleBtn.disabled = false;
+            statusPill.className = 'model-status-pill';
+            statusPill.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> FAILED';
+            console.error('Start failed:', err);
+            return;
         }
-    } else {
+    } else if (model.status === 'running') {
         // Stop process
         toggleBtn.disabled = true;
         statusPill.className = 'model-status-pill status-loading';
-        statusPill.innerHTML = '<i class="fa-solid fa-spinner"></i> SHUTTING DOWN...';
+        statusPill.innerHTML = '<i class="fa-solid fa-spinner"></i> STOPPING...';
 
         try {
             const res = await fetch('/api/stop', {
@@ -1226,53 +1367,49 @@ async function executeModelToggle(modelId) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: modelId })
             });
-            const data = await res.json();
 
-            if (data.success) {
-                fetchSystemState(true);
-            } else {
-                showToast('Stop request failed: ' + data.error, 'error');
-                fetchSystemState(true);
+            if (!res.ok) {
+                throw new Error(`Failed to stop: ${res.statusText}`);
             }
+
+            await res.json();
+            model.status = 'stopped';
+            statusPill.className = 'model-status-pill';
+            statusPill.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> STOPPED';
         } catch (err) {
-            showToast('API Network Error: ' + err.message, 'error');
-            fetchSystemState(true);
+            toggleBtn.disabled = false;
+            statusPill.className = 'model-status-pill';
+            statusPill.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> FAILED';
+            console.error('Stop failed:', err);
+            return;
         }
     }
+
+    toggleBtn.disabled = false;
 }
 
-async function handleStopAll() {
-    if (!confirm('Are you sure you want to stop all running llama-server compute processes?')) return;
-
-    try {
-        const res = await fetch('/api/stop_all', { method: 'POST' });
-        const data = await res.json();
-        if (data.success) {
-            fetchSystemState(true);
-        }
-    } catch (err) {
-        alert('Failed to execute stop-all command: ' + err.message);
-    }
-}
-
-// Logs Console Drawer logic
+/**
+ * Open the console/drawer for a model's logs
+ */
 function openConsole(modelId) {
-    const drawer = document.getElementById('logs-drawer');
-    const modelLabel = document.getElementById('current-log-model');
-    const content = document.getElementById('console-content');
-
-    // Close existing stream
-    if (appState.logPollIntervalId) {
-        clearInterval(appState.logPollIntervalId);
-    }
-
     appState.activeLogModel = modelId;
     const model = appState.models.find(m => m.id === modelId);
-    modelLabel.textContent = model ? model.name.toUpperCase() : modelId.toUpperCase();
+
+    const modelLabel = document.getElementById('console-model-label');
+    const drawer = document.getElementById('logs-drawer');
+    const content = document.getElementById('console-content');
+
+    if (modelLabel) {
+        modelLabel.textContent = model ? model.name.toUpperCase() : modelId.toUpperCase();
+    }
 
     // Show drawer
-    drawer.classList.add('open');
-    content.textContent = 'Opening console socket connection...';
+    if (drawer) {
+        drawer.classList.add('open');
+    }
+    if (content) {
+        content.textContent = 'Opening console socket connection...';
+    }
 
     // Poll logs immediately
     pollLogs();
@@ -1719,9 +1856,28 @@ async function handleImportModels() {
 // PIN Security System                       //
 // ========================================= //
 
-const PIN_STORAGE_KEY = 'llamashift_pin';
+const PIN_SET_KEY = 'llamashift_pin_set';
 const PIN_SESSION_KEY = 'llamashift_pin_session'; // Timestamp of last successful verification
+const PIN_SESSION_TOKEN_KEY = 'llamashift_pin_session_token';
 const PIN_SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+// DOM Elements for PIN screens (using getters to handle late DOM loading)
+const getPinOverlay = () => document.getElementById('pin-security-overlay');
+const getCreateDisplay = () => Array.from(document.querySelectorAll('#pin-create-display .pin-digit'));
+const getConfirmDisplay = () => Array.from(document.querySelectorAll('#pin-confirm-display .pin-digit'));
+const getVerifyDisplay = () => Array.from(document.querySelectorAll('#pin-verify-display .pin-digit'));
+
+// DOM Elements for Change PIN screens
+const getChangeVerifyDisplay = () => Array.from(document.querySelectorAll('#pin-change-verify-display .pin-digit'));
+const getChangeNewDisplay = () => Array.from(document.querySelectorAll('#pin-change-new-display .pin-digit'));
+const getChangeConfirmDisplay = () => Array.from(document.querySelectorAll('#pin-change-confirm-display .pin-digit'));
+const getChangeSection = () => document.getElementById('pin-change-section');
+const getChangeVerifyStep = () => document.getElementById('change-verify-step');
+const getChangeNewStep = () => document.getElementById('change-new-step');
+const getChangeConfirmStep = () => document.getElementById('change-confirm-step');
+const getStep1 = () => document.getElementById('step-1');
+const getStep2 = () => document.getElementById('step-2');
+const getStep3 = () => document.getElementById('step-3');
 
 const PinSecurity = {
     currentPin: '',
@@ -1732,32 +1888,89 @@ const PinSecurity = {
      * Check if PIN exists
      */
     hasPin: function() {
-        return localStorage.getItem(PIN_STORAGE_KEY) !== null;
+        return localStorage.getItem(PIN_SET_KEY) === 'true';
     },
 
     /**
-     * Get stored PIN hash
-     */
-    getStoredPin: function() {
-        return localStorage.getItem(PIN_STORAGE_KEY);
-    },
-
-    /**
-     * Save PIN (stores hash)
+     * Save PIN state locally for client-side flow
      */
     savePin: async function(pin) {
-        // Store as plain text for simplicity (6 digits is manageable)
-        // In production, you should hash this with a salt
-        localStorage.setItem(PIN_STORAGE_KEY, pin);
+        localStorage.setItem(PIN_SET_KEY, 'true');
         return true;
     },
 
     /**
-     * Clear PIN (for debugging/testing)
+     * Verify a PIN with the backend and return whether it is valid
      */
-    clearPin: function() {
-        localStorage.removeItem(PIN_STORAGE_KEY);
-        localStorage.removeItem(PIN_SESSION_KEY);
+    verifyPin: async function(pin) {
+        if (!pin) return false;
+
+        try {
+            const response = await fetch('/api/pin', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    action: 'verify',
+                    pin: pin
+                })
+            });
+
+            if (!response.ok) {
+                return false;
+            }
+
+            const data = await response.json();
+            if (data && data.success === true && data.sessionToken) {
+                localStorage.setItem(PIN_SESSION_TOKEN_KEY, data.sessionToken);
+            }
+            return data && data.success === true;
+        } catch (error) {
+            console.error('PIN verify failed:', error);
+            return false;
+        }
+    },
+
+    /**
+     * Check PIN validity and update session
+     */
+    getPinStatus: async function() {
+        try {
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            const sessionToken = localStorage.getItem(PIN_SESSION_TOKEN_KEY);
+            if (sessionToken) {
+                headers['X-Pin-Session'] = sessionToken;
+            }
+
+            const response = await fetch('/api/pin', {
+                method: 'GET',
+                headers
+            });
+            if (!response.ok) {
+                return { pinSet: this.hasPin(), sessionValid: false };
+            }
+            const data = await response.json();
+            return {
+                pinSet: data.pinSet === true || this.hasPin(),
+                sessionValid: data.sessionValid === true
+            };
+        } catch (error) {
+            console.error('Failed to fetch PIN status:', error);
+            return { pinSet: this.hasPin(), sessionValid: false };
+        }
+    },
+
+    checkPinSecurity: async function() {
+        if (!this.isSessionValid()) {
+            const status = await this.getPinStatus();
+            if (status.pinSet && status.sessionValid) {
+                this.updateSession();
+            }
+        }
+        return this.isSessionValid();
     },
 
     /**
@@ -1773,72 +1986,189 @@ const PinSecurity = {
     /**
      * Update session timestamp
      */
-    updateSession: function() {
+    updateSession: function(sessionToken) {
+        if (sessionToken) {
+            localStorage.setItem(PIN_SESSION_TOKEN_KEY, sessionToken);
+        }
         localStorage.setItem(PIN_SESSION_KEY, Date.now());
     },
 
     /**
-     * Hash PIN (simple prefix for obfuscation)
+     * Clear PIN (for debugging/testing)
      */
-    hashPin: function(pin) {
-        // Simple obfuscation - in production use proper hashing
-        return 'pin:' + pin;
+    clearPin: function() {
+        localStorage.removeItem(PIN_SET_KEY);
+        localStorage.removeItem(PIN_SESSION_KEY);
     },
 
-    /**
-     * Check if PIN matches stored (server-side verification)
-     */
-    verifyPin: async function(pin) {
-        try {
-            const response = await fetch('/api/pin', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'verify', pin: pin })
-            });
-            const data = await response.json();
-            return data.success === true;
-        } catch (err) {
-            console.error('PIN verification error:', err);
-            return false;
-        }
-    }
 };
 
-// DOM Elements
-let pinOverlay = null;
-let createDisplay = [];
-let confirmDisplay = [];
-let verifyDisplay = [];
+/**
+ * Handle PIN creation (first step of PIN setup)
+ */
+function handleCreatePin() {
+    const pin = PinSecurity.currentPin;
+    const errorEl = document.getElementById('pin-create-error');
+    
+    if (!pin || pin.length < 6) {
+        if (errorEl) {
+            errorEl.textContent = 'PIN must be at least 6 digits';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    // Advance to confirm step
+    showConfirmPinScreen();
+}
 
 /**
- * Initialize PIN security system
+ * Handle PIN confirmation (second step of PIN setup)
  */
-function initPinSecurity() {
-    // Cache DOM elements
-    pinOverlay = document.getElementById('pin-security-overlay');
+async function handleConfirmPin() {
+    const pin = PinSecurity.confirmedPin;
+    const createPin = PinSecurity.currentPin;
+    const errorEl = document.getElementById('pin-confirm-error');
     
-    // Create PIN display digits
-    const createDigits = document.querySelectorAll('#pin-create-display .pin-digit');
-    createDisplay = Array.from(createDigits);
+    if (!pin || pin.length < 6) {
+        if (errorEl) {
+            errorEl.textContent = 'PIN must be at least 6 digits';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    if (pin !== createPin) {
+        if (errorEl) {
+            errorEl.textContent = 'PINs do not match';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    // Show loading state
+    const confirmBtn = document.getElementById('pin-confirm-done-btn');
+    confirmBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Setting...';
+    confirmBtn.disabled = true;
+    
+    try {
+        const response = await fetch('/api/pin', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                action: 'set',
+                pin: pin
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            // Store local flag that a PIN exists for client refresh behavior
+            await PinSecurity.savePin(pin);
+            // Clear PIN state
+            PinSecurity.currentPin = '';
+            PinSecurity.confirmedPin = '';
+            // Clear displays
+            getCreateDisplay().forEach(d => {
+                d.textContent = '';
+                d.classList.remove('filled');
+            });
+            getConfirmDisplay().forEach(d => {
+                d.textContent = '';
+                d.classList.remove('filled');
+            });
+            // Hide overlay
+            hidePinOverlay();
+            showToast('PIN set successfully', 'success');
+        } else {
+            if (errorEl) {
+                errorEl.textContent = data.message || 'Failed to set PIN';
+                errorEl.style.display = 'block';
+            }
+        }
+    } catch (error) {
+        console.error('PIN set error:', error);
+        if (errorEl) {
+            errorEl.textContent = 'Network error';
+            errorEl.style.display = 'block';
+        }
+    } finally {
+        confirmBtn.innerHTML = '<i class="fa-solid fa-check"></i> Done';
+        confirmBtn.disabled = false;
+    }
+}
 
-    // Confirm PIN display digits
-    const confirmDigits = document.querySelectorAll('#pin-confirm-display .pin-digit');
-    confirmDisplay = Array.from(confirmDigits);
+/**
+ * Handle PIN verification
+ */
+async function handlePinVerification() {
+    // Get the PIN from the display (since we're using display digits, not a text input)
+    const pin = PinSecurity.currentPin;
+    const errorEl = document.getElementById('pin-verify-error');
+    
+    if (!pin) {
+        if (errorEl) {
+            errorEl.textContent = 'Please enter your PIN';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+    
+    // Show loading state
+    const verifyBtn = document.getElementById('pin-verify-done-btn');
+    const originalBtnText = verifyBtn.innerHTML;
+    verifyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+    verifyBtn.disabled = true;
+    
+    try {
+        const isVerified = await PinSecurity.verifyPin(pin);
 
-    // Verify PIN display digits
-    const verifyDigits = document.querySelectorAll('#pin-verify-display .pin-digit');
-    verifyDisplay = Array.from(verifyDigits);
+        if (isVerified) {
+            PinSecurity.updateSession();
+            PinSecurity.currentPin = '';
+            PinSecurity.confirmedPin = '';
+            hidePinOverlay();
+        } else {
+            if (errorEl) {
+                errorEl.textContent = 'Invalid PIN';
+                errorEl.style.display = 'block';
+            }
+            // Clear the PIN display
+            getVerifyDisplay().forEach(d => {
+                d.textContent = '';
+                d.classList.remove('filled');
+            });
+            PinSecurity.currentPin = '';
+        }
+    } catch (error) {
+        console.error('PIN verification error:', error);
+        if (errorEl) {
+            errorEl.textContent = 'Network error. Please try again.';
+            errorEl.style.display = 'block';
+        }
+    } finally {
+        // Restore button state
+        verifyBtn.innerHTML = originalBtnText;
+        verifyBtn.disabled = false;
+    }
+}
 
-    // Setup event listeners for all keypad buttons
-    setupKeypadListeners();
+/**
+ * Show the appropriate PIN screen on page load
+ */
+async function showInitialPinScreen() {
+    const status = await PinSecurity.getPinStatus();
 
-    // Check if PIN exists on load
-    if (PinSecurity.hasPin()) {
-        // Check if session is still valid (within 24 hours)
+    if (status.pinSet) {
         if (PinSecurity.isSessionValid()) {
-            // Session valid - skip PIN screen
+            // Already verified locally, no PIN overlay needed
             return;
         }
+
+        // Ask user to verify with current PIN
         showVerifyPinScreen();
     } else {
         showCreatePinScreen();
@@ -1849,81 +2179,109 @@ function initPinSecurity() {
  * Setup keypad button event listeners
  */
 function setupKeypadListeners() {
-    const keys = document.querySelectorAll('.pin-key');
-    keys.forEach(button => {
-        button.addEventListener('click', (e) => {
-            e.preventDefault();
-            
-            const key = button.getAttribute('data-key');
+    // Use event delegation for all keypad buttons
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('pin-key')) {
+            const button = e.target;
+            const digit = button.getAttribute('data-key') || button.textContent.trim();
             const action = button.getAttribute('data-action');
-
-            if (key !== null) {
-                // Number key pressed
-                handleDigitInput(key);
-            } else if (action === 'clear') {
-                // Clear pressed
-                handleClearInput();
-            } else if (action === 'done') {
-                // Done button pressed
-                handleDoneInput();
+            
+            // Get current mode from the DOM
+            const currentMode = getCurrentPinMode();
+            
+            // Handle clear action
+            if (action === 'clear') {
+                // Clear current PIN in memory
+                if (currentMode === 'create') {
+                    PinSecurity.currentPin = '';
+                } else if (currentMode === 'confirm') {
+                    PinSecurity.confirmedPin = '';
+                } else if (currentMode === 'verify') {
+                    PinSecurity.currentPin = '';
+                } else if (currentMode === 'change') {
+                    handleChangePinClear();
+                }
+                
+                // Clear display
+                if (currentMode === 'create') {
+                    getCreateDisplay().forEach(d => {
+                        d.textContent = '';
+                        d.classList.remove('filled');
+                    });
+                } else if (currentMode === 'confirm') {
+                    getConfirmDisplay().forEach(d => {
+                        d.textContent = '';
+                        d.classList.remove('filled');
+                    });
+                } else if (currentMode === 'verify') {
+                    getVerifyDisplay().forEach(d => {
+                        d.textContent = '';
+                        d.classList.remove('filled');
+                    });
+                }
+                return;
             }
-        });
+            
+            // Handle done action
+            if (action === 'done') {
+                if (currentMode === 'create') {
+                    handleCreatePin();
+                } else if (currentMode === 'confirm') {
+                    handleConfirmPin();
+                } else if (currentMode === 'verify') {
+                    handlePinVerification();
+                }
+                return;
+            }
+            
+            // Handle change PIN specific actions (verify, new, confirm buttons)
+            if (currentMode === 'change' && action && action.startsWith('change-')) {
+                handleChangePinAction(action);
+                return;
+            }
+
+            // Handle cancel button clicks in the change PIN flow
+            if (e.target.closest('.pin-cancel-btn')) {
+                handleCancelChangePin();
+                return;
+            }
+            
+            // Only process numeric digits
+            if (digit && !isNaN(digit) && digit !== '') {
+                // Handle digit input based on current mode
+                if (currentMode === 'create') {
+                    // Add digit to create display
+                    const emptySlotIndex = Array.from(getCreateDisplay()).findIndex(d => !d.textContent);
+                    if (emptySlotIndex !== -1) {
+                        getCreateDisplay()[emptySlotIndex].textContent = digit;
+                        getCreateDisplay()[emptySlotIndex].classList.add('filled');
+                        PinSecurity.currentPin += digit;
+                    }
+                } else if (currentMode === 'confirm') {
+                    // Add digit to confirm display
+                    const emptySlotIndex = Array.from(getConfirmDisplay()).findIndex(d => !d.textContent);
+                    if (emptySlotIndex !== -1) {
+                        getConfirmDisplay()[emptySlotIndex].textContent = digit;
+                        getConfirmDisplay()[emptySlotIndex].classList.add('filled');
+                        PinSecurity.confirmedPin += digit;
+                    }
+                } else if (currentMode === 'verify') {
+                    // Add digit to verify display
+                    const emptySlotIndex = Array.from(getVerifyDisplay()).findIndex(d => !d.textContent);
+                    if (emptySlotIndex !== -1) {
+                        getVerifyDisplay()[emptySlotIndex].textContent = digit;
+                        getVerifyDisplay()[emptySlotIndex].classList.add('filled');
+                        PinSecurity.currentPin += digit;
+                    }
+                } else if (currentMode === 'change') {
+                    // Add digit to change PIN display
+                    handleChangePinDigit(digit);
+                }
+            }
+        }
     });
-
-    // Keyboard support
-    document.addEventListener('keydown', handleKeyboardInput);
 }
 
-/**
- * Handle keyboard input for PIN
- */
-function handleKeyboardInput(e) {
-    // Don't process if PIN overlay is hidden
-    if (pinOverlay.classList.contains('hidden')) return;
-
-    // Number keys
-    if (e.key >= '0' && e.key <= '9') {
-        handleDigitInput(e.key);
-    } else if (e.key === 'Backspace') {
-        handleClearInput();
-    } else if (e.key === 'Enter') {
-        handleDoneInput();
-    } else if (e.key === 'Escape') {
-        // Don't allow escape to close PIN overlay
-        e.preventDefault();
-    }
-}
-
-/**
- * Handle digit input
- */
-function handleDigitInput(digit) {
-    const currentMode = getCurrentPinMode();
-
-    if (currentMode === 'create') {
-        // Find empty digit slots
-        const emptySlotIndex = Array.from(createDisplay).findIndex(d => !d.textContent);
-        if (emptySlotIndex !== -1) {
-            createDisplay[emptySlotIndex].textContent = digit;
-            createDisplay[emptySlotIndex].classList.add('filled');
-            PinSecurity.currentPin += digit;
-        }
-    } else if (currentMode === 'confirm') {
-        const emptySlotIndex = Array.from(confirmDisplay).findIndex(d => !d.textContent);
-        if (emptySlotIndex !== -1) {
-            confirmDisplay[emptySlotIndex].textContent = digit;
-            confirmDisplay[emptySlotIndex].classList.add('filled');
-            PinSecurity.confirmedPin += digit;
-        }
-    } else if (currentMode === 'verify') {
-        const emptySlotIndex = Array.from(verifyDisplay).findIndex(d => !d.textContent);
-        if (emptySlotIndex !== -1) {
-            verifyDisplay[emptySlotIndex].textContent = digit;
-            verifyDisplay[emptySlotIndex].classList.add('filled');
-            PinSecurity.currentPin += digit;
-        }
-    }
-}
 
 /**
  * Handle clear input
@@ -1933,7 +2291,7 @@ function handleClearInput() {
 
     if (currentMode === 'create') {
         // Remove last digit
-        const digits = Array.from(createDisplay);
+        const digits = Array.from(getCreateDisplay());
         for (let i = digits.length - 1; i >= 0; i--) {
             if (digits[i].textContent) {
                 digits[i].textContent = '';
@@ -1943,7 +2301,7 @@ function handleClearInput() {
             }
         }
     } else if (currentMode === 'confirm') {
-        const digits = Array.from(confirmDisplay);
+        const digits = Array.from(getConfirmDisplay());
         for (let i = digits.length - 1; i >= 0; i--) {
             if (digits[i].textContent) {
                 digits[i].textContent = '';
@@ -1953,7 +2311,7 @@ function handleClearInput() {
             }
         }
     } else if (currentMode === 'verify') {
-        const digits = Array.from(verifyDisplay);
+        const digits = Array.from(getVerifyDisplay());
         for (let i = digits.length - 1; i >= 0; i--) {
             if (digits[i].textContent) {
                 digits[i].textContent = '';
@@ -1990,7 +2348,7 @@ async function handleDoneInput() {
             showPinError('pin-confirm-section', 'PINs do not match. Please try again.');
             // Reset confirmation input
             PinSecurity.confirmedPin = '';
-            confirmDisplay.forEach(d => {
+            getConfirmDisplay().forEach(d => {
                 d.textContent = '';
                 d.classList.remove('filled');
             });
@@ -2024,10 +2382,10 @@ async function handleDoneInput() {
         } else {
             showPinError('pin-verify-section', 'Incorrect PIN. Please try again.');
             // Add error styling to digits
-            verifyDisplay.forEach(d => d.classList.add('error'));
+            getVerifyDisplay().forEach(d => d.classList.add('error'));
             setTimeout(() => {
                 PinSecurity.currentPin = '';
-                verifyDisplay.forEach(d => {
+                getVerifyDisplay().forEach(d => {
                     d.textContent = '';
                     d.classList.remove('filled');
                     d.classList.remove('error');
@@ -2047,6 +2405,8 @@ function getCurrentPinMode() {
         return 'confirm';
     } else if (document.getElementById('pin-verify-section').classList.contains('active')) {
         return 'verify';
+    } else if (document.getElementById('pin-change-section').classList.contains('active')) {
+        return 'change';
     }
     return null;
 }
@@ -2072,27 +2432,33 @@ function showCreatePinScreen() {
     PinSecurity.currentPin = '';
     
     // Clear all displays
-    createDisplay.forEach(d => {
+    getCreateDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
-    confirmDisplay.forEach(d => {
+    getConfirmDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
-    verifyDisplay.forEach(d => {
+    getVerifyDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
     
     // Show create section, hide others
-    document.getElementById('pin-create-section').classList.add('active');
-    document.getElementById('pin-confirm-section').classList.remove('active');
-    document.getElementById('pin-verify-section').classList.remove('active');
+    const createSection = document.getElementById('pin-create-section');
+    const confirmSection = document.getElementById('pin-confirm-section');
+    const verifySection = document.getElementById('pin-verify-section');
+    
+    if (createSection) createSection.classList.add('active');
+    if (confirmSection) confirmSection.classList.remove('active');
+    if (verifySection) verifySection.classList.remove('active');
     
     // Show overlay
-    pinOverlay.classList.remove('hidden');
-    pinOverlay.classList.add('open');
+    if (getPinOverlay()) {
+        getPinOverlay().classList.remove('hidden');
+        getPinOverlay().classList.add('open');
+    }
 }
 
 /**
@@ -2100,12 +2466,15 @@ function showCreatePinScreen() {
  */
 function showConfirmPinScreen() {
     // Hide create, show confirm
-    document.getElementById('pin-create-section').classList.remove('active');
-    document.getElementById('pin-confirm-section').classList.add('active');
+    const createSection = document.getElementById('pin-create-section');
+    const confirmSection = document.getElementById('pin-confirm-section');
+    
+    if (createSection) createSection.classList.remove('active');
+    if (confirmSection) confirmSection.classList.add('active');
     
     // Clear confirm display
     PinSecurity.confirmedPin = '';
-    confirmDisplay.forEach(d => {
+    getConfirmDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
@@ -2123,13 +2492,17 @@ function showConfirmPinScreen() {
  */
 function showVerifyPinScreen() {
     // Hide create and confirm, show verify
-    document.getElementById('pin-create-section').classList.remove('active');
-    document.getElementById('pin-confirm-section').classList.remove('active');
-    document.getElementById('pin-verify-section').classList.add('active');
+    const createSection = document.getElementById('pin-create-section');
+    const confirmSection = document.getElementById('pin-confirm-section');
+    const verifySection = document.getElementById('pin-verify-section');
+    
+    if (createSection) createSection.classList.remove('active');
+    if (confirmSection) confirmSection.classList.remove('active');
+    if (verifySection) verifySection.classList.add('active');
     
     // Clear verify display
     PinSecurity.currentPin = '';
-    verifyDisplay.forEach(d => {
+    getVerifyDisplay().forEach(d => {
         d.textContent = '';
         d.classList.remove('filled');
     });
@@ -2142,17 +2515,406 @@ function showVerifyPinScreen() {
     }
     
     // Show overlay
-    pinOverlay.classList.remove('hidden');
-    pinOverlay.classList.add('open');
+    if (getPinOverlay()) {
+        getPinOverlay().classList.remove('hidden');
+        getPinOverlay().classList.add('open');
+    }
 }
 
 /**
  * Hide PIN overlay
  */
 function hidePinOverlay() {
-    pinOverlay.classList.remove('open');
-    setTimeout(() => {
-        pinOverlay.classList.add('hidden');
-    }, 300);
+    if (getPinOverlay()) {
+        getPinOverlay().classList.remove('open');
+        setTimeout(() => {
+            getPinOverlay().classList.add('hidden');
+        }, 300);
+    }
 }
 
+// ========================================= //
+// Change PIN System                         //
+// ========================================= //
+
+const ChangePin = {
+    currentPin: '',
+    newPin: '',
+    confirmedPin: '',
+    maxDigits: 6,
+};
+
+/**
+ * Show Change PIN screen
+ */
+function showChangePinScreen() {
+    // Reset all change PIN state
+    ChangePin.currentPin = '';
+    ChangePin.newPin = '';
+    ChangePin.confirmedPin = '';
+    
+    // Clear all displays
+    getChangeVerifyDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    getChangeNewDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    getChangeConfirmDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    
+    // Clear all error messages
+    const verifyErr = document.getElementById('pin-change-verify-error');
+    const newErr = document.getElementById('pin-change-new-error');
+    const confirmErr = document.getElementById('pin-change-confirm-error');
+    if (verifyErr) verifyErr.textContent = '';
+    if (newErr) newErr.textContent = '';
+    if (confirmErr) confirmErr.textContent = '';
+    
+    // Reset step indicators
+    goToChangePinStep(1);
+    
+    // Show change section and overlay
+    const createSection = document.getElementById('pin-create-section');
+    const confirmSection = document.getElementById('pin-confirm-section');
+    const verifySection = document.getElementById('pin-verify-section');
+    const changeSection = document.getElementById('pin-change-section');
+
+    if (createSection) createSection.classList.remove('active');
+    if (confirmSection) confirmSection.classList.remove('active');
+    if (verifySection) verifySection.classList.remove('active');
+    if (changeSection) changeSection.classList.add('active');
+
+    if (getPinOverlay()) {
+        getPinOverlay().classList.remove('hidden');
+        getPinOverlay().classList.add('open');
+    }
+}
+
+/**
+ * Go to a specific step in the change PIN flow
+ */
+function goToChangePinStep(step) {
+    // Hide all steps
+    if (getChangeVerifyStep()) getChangeVerifyStep().classList.remove('active');
+    if (getChangeNewStep()) getChangeNewStep().classList.remove('active');
+    if (getChangeConfirmStep()) getChangeConfirmStep().classList.remove('active');
+    
+    // Update step indicators
+    if (getStep1()) { getStep1().classList.toggle('active', step >= 1); getStep1().classList.toggle('completed', step > 1); }
+    if (getStep2()) { getStep2().classList.toggle('active', step >= 2); getStep2().classList.toggle('completed', step > 2); }
+    if (getStep3()) { getStep3().classList.toggle('active', step >= 3); }
+    
+    // Show current step
+    if (step === 1 && getChangeVerifyStep()) getChangeVerifyStep().classList.add('active');
+    else if (step === 2 && getChangeNewStep()) getChangeNewStep().classList.add('active');
+    else if (step === 3 && getChangeConfirmStep()) getChangeConfirmStep().classList.add('active');
+}
+
+/**
+ * Show error in change PIN flow
+ */
+function showChangePinError(step, message) {
+    const errorId = step === 1 ? 'pin-change-verify-error' :
+                    step === 2 ? 'pin-change-new-error' :
+                    'pin-change-confirm-error';
+    const errorEl = document.getElementById(errorId);
+    if (errorEl) {
+        errorEl.textContent = message;
+        errorEl.style.display = 'block';
+    }
+}
+
+/**
+ * Handle change PIN verification (step 1)
+ */
+async function handleChangePinVerify() {
+    const pin = ChangePin.currentPin;
+    
+    if (pin.length !== 6) {
+        showChangePinError(1, 'Please enter your 6-digit PIN');
+        return;
+    }
+    
+    // Show loading state
+    const btn = document.querySelector('[data-action="change-verify"]');
+    const originalText = btn ? btn.textContent : '';
+    if (btn) {
+        btn.textContent = 'VERIFYING...';
+        btn.disabled = true;
+    }
+    
+    try {
+        const response = await fetch('/api/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'verify',
+                pin: pin
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            // Current PIN is correct, move to step 2
+            goToChangePinStep(2);
+            // Clear the verify display but keep current PIN value for comparison
+            getChangeVerifyDisplay().forEach(d => {
+                d.textContent = '';
+                d.classList.remove('filled');
+            });
+        } else {
+            showChangePinError(1, data.message || 'Invalid current PIN');
+            getChangeVerifyDisplay().forEach(d => d.classList.add('error'));
+            setTimeout(() => {
+                getChangeVerifyDisplay().forEach(d => {
+                    d.classList.remove('error');
+                    d.textContent = '';
+                });
+                ChangePin.currentPin = '';
+            }, 800);
+        }
+    } catch (error) {
+        console.error('Change PIN verification error:', error);
+        showChangePinError(1, 'Network error. Please try again.');
+    } finally {
+        if (btn) {
+            btn.textContent = originalText;
+            btn.disabled = false;
+        }
+    }
+}
+
+/**
+ * Handle new PIN entry (step 2)
+ */
+function handleChangePinNew() {
+    const pin = ChangePin.newPin;
+    
+    if (pin.length !== 6) {
+        showChangePinError(2, 'Please enter a 6-digit PIN');
+        return;
+    }
+    
+    if (ChangePin.currentPin && pin === ChangePin.currentPin) {
+        showChangePinError(2, 'New PIN must be different from current PIN');
+        return;
+    }
+    
+    // Move to step 3
+    goToChangePinStep(3);
+    // Clear the new PIN display only; keep the new PIN value for confirmation
+    getChangeNewDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled');
+    });
+}
+
+/**
+ * Handle change PIN confirmation (step 3)
+ */
+async function handleChangePinConfirm() {
+    const pin = ChangePin.confirmedPin;
+    
+    if (pin.length !== 6) {
+        showChangePinError(3, 'Please confirm your 6-digit PIN');
+        return;
+    }
+    
+    if (pin !== ChangePin.newPin) {
+        showChangePinError(3, 'PINs do not match. Please try again.');
+        getChangeConfirmDisplay().forEach(d => d.classList.add('error'));
+        setTimeout(() => {
+            getChangeConfirmDisplay().forEach(d => {
+                d.classList.remove('error');
+                d.textContent = '';
+            });
+            ChangePin.confirmedPin = '';
+        }, 800);
+        return;
+    }
+    
+    // Show loading state
+    const btn = document.querySelector('[data-action="change-confirm"]');
+    const originalText = btn ? btn.textContent : '';
+    if (btn) {
+        btn.textContent = 'CHANGING...';
+        btn.disabled = true;
+    }
+    
+    try {
+        const response = await fetch('/api/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'change',
+                currentPin: ChangePin.currentPin,
+                newPin: pin
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            showToast('PIN changed successfully!', 'success');
+            hidePinOverlay();
+        } else {
+            showChangePinError(3, data.message || 'Failed to change PIN');
+        }
+    } catch (error) {
+        console.error('Change PIN confirmation error:', error);
+        showChangePinError(3, 'Network error. Please try again.');
+    } finally {
+        if (btn) {
+            btn.textContent = originalText;
+            btn.disabled = false;
+        }
+    }
+}
+
+/**
+ * Handle change PIN keypad actions
+ */
+function handleChangePinAction(action) {
+    if (action === 'change-verify') {
+        handleChangePinVerify();
+    } else if (action === 'change-new') {
+        handleChangePinNew();
+    } else if (action === 'change-confirm') {
+        handleChangePinConfirm();
+    }
+}
+
+/**
+ * Get current change PIN step
+ */
+function getCurrentChangePinStep() {
+    if (getChangeVerifyStep() && getChangeVerifyStep().classList.contains('active')) return 1;
+    if (getChangeNewStep() && getChangeNewStep().classList.contains('active')) return 2;
+    if (getChangeConfirmStep() && getChangeConfirmStep().classList.contains('active')) return 3;
+    return null;
+}
+
+/**
+ * Handle digit input in change PIN flow
+ */
+function handleChangePinDigit(digit) {
+    const step = getCurrentChangePinStep();
+    
+    if (step === 1) {
+        const display = Array.from(getChangeVerifyDisplay());
+        const emptySlot = display.findIndex(d => !d.textContent);
+        if (emptySlot !== -1) {
+            display[emptySlot].textContent = digit;
+            display[emptySlot].classList.add('filled');
+            ChangePin.currentPin += digit;
+        }
+    } else if (step === 2) {
+        const display = Array.from(getChangeNewDisplay());
+        const emptySlot = display.findIndex(d => !d.textContent);
+        if (emptySlot !== -1) {
+            display[emptySlot].textContent = digit;
+            display[emptySlot].classList.add('filled');
+            ChangePin.newPin += digit;
+        }
+    } else if (step === 3) {
+        const display = Array.from(getChangeConfirmDisplay());
+        const emptySlot = display.findIndex(d => !d.textContent);
+        if (emptySlot !== -1) {
+            display[emptySlot].textContent = digit;
+            display[emptySlot].classList.add('filled');
+            ChangePin.confirmedPin += digit;
+        }
+    }
+}
+
+/**
+ * Handle clear input in change PIN flow
+ */
+function handleChangePinClear() {
+    const step = getCurrentChangePinStep();
+    
+    if (step === 1) {
+        ChangePin.currentPin = ChangePin.currentPin.slice(0, -1);
+        for (let i = getChangeVerifyDisplay().length - 1; i >= 0; i--) {
+            if (getChangeVerifyDisplay()[i].textContent) {
+                getChangeVerifyDisplay()[i].textContent = '';
+                getChangeVerifyDisplay()[i].classList.remove('filled');
+                break;
+            }
+        }
+    } else if (step === 2) {
+        ChangePin.newPin = ChangePin.newPin.slice(0, -1);
+        for (let i = getChangeNewDisplay().length - 1; i >= 0; i--) {
+            if (getChangeNewDisplay()[i].textContent) {
+                getChangeNewDisplay()[i].textContent = '';
+                getChangeNewDisplay()[i].classList.remove('filled');
+                break;
+            }
+        }
+    } else if (step === 3) {
+        ChangePin.confirmedPin = ChangePin.confirmedPin.slice(0, -1);
+        for (let i = getChangeConfirmDisplay().length - 1; i >= 0; i--) {
+            if (getChangeConfirmDisplay()[i].textContent) {
+                getChangeConfirmDisplay()[i].textContent = '';
+                getChangeConfirmDisplay()[i].classList.remove('filled');
+                break;
+            }
+        }
+    }
+}
+
+/**
+ * Handle cancel button in change PIN flow
+ */
+function handleCancelChangePin() {
+    // Reset all PIN values
+    ChangePin.currentPin = '';
+    ChangePin.newPin = '';
+    ChangePin.confirmedPin = '';
+    
+    // Clear all displays
+    getChangeVerifyDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    getChangeNewDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    getChangeConfirmDisplay().forEach(d => {
+        d.textContent = '';
+        d.classList.remove('filled', 'error');
+    });
+    
+    // Clear all error messages
+    const verifyErr = document.getElementById('pin-change-verify-error');
+    const newErr = document.getElementById('pin-change-new-error');
+    const confirmErr = document.getElementById('pin-change-confirm-error');
+    if (verifyErr) verifyErr.textContent = '';
+    if (newErr) newErr.textContent = '';
+    if (confirmErr) confirmErr.textContent = '';
+    
+    // Reset step indicators
+    goToChangePinStep(1);
+    
+    // Hide the PIN overlay
+    hidePinOverlay();
+}
+
+// ==============================
+// PIN Security Initialization
+// ==============================
+
+/**
+ * Initialize PIN security system
+ */
+async function initPinSecurity() {
+    setupKeypadListeners();
+    await showInitialPinScreen(); // Ensure the PIN screen is shown if needed
+}

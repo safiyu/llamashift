@@ -190,10 +190,31 @@
     border: 3px solid var(--bg-dim);
 }
 
+/* Progress arc: SVG path spanning 270° (bottom-left → bottom-right, clockwise).
+   pathLength="100" normalizes the path so --pct (0-100) maps 1:1 to dashoffset —
+   the filled arc length is always proportional to the displayed value. */
 .gauge-ring-progress {
     position: absolute;
     inset: 0;
-    border-radius: 50%;
+    width: 100%;
+    height: 100%;
+}
+
+.gauge-ring-progress svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.gauge-ring-progress path {
+    fill: none;
+    stroke: var(--gauge-color, #ffffff);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-dasharray: 100;
+    stroke-dashoffset: calc(100 - var(--pct, 0));
+    transition: stroke-dashoffset 0.5s ease;
+    filter: drop-shadow(0 0 4px var(--gauge-glow, transparent));
 }
 
 /* CPU Gauge */
@@ -211,13 +232,8 @@
 }
 
 .cpu-tile .gauge-ring-progress {
-    border: 3px solid transparent;
-    border-top-color: var(--cpu-neon);
-    border-right-color: var(--cpu-neon);
-    border-radius: 50%;
-    transform: rotate(0deg);
-    transition: transform 0.5s ease;
-    box-shadow: 0 0 15px var(--cpu-glow);
+    --gauge-color: var(--cpu-neon);
+    --gauge-glow: var(--cpu-glow);
 }
 
 /* RAM Gauge */
@@ -235,13 +251,8 @@
 }
 
 .ram-tile .gauge-ring-progress {
-    border: 3px solid transparent;
-    border-top-color: var(--ram-neon);
-    border-right-color: var(--ram-neon);
-    border-radius: 50%;
-    transform: rotate(0deg);
-    transition: transform 0.5s ease;
-    box-shadow: 0 0 15px var(--ram-glow);
+    --gauge-color: var(--ram-neon);
+    --gauge-glow: var(--ram-glow);
 }
 
 /* NVIDIA Gauge */
@@ -259,13 +270,8 @@
 }
 
 .nvidia-tile .gauge-ring-progress {
-    border: 3px solid transparent;
-    border-top-color: var(--nvidia-neon);
-    border-right-color: var(--nvidia-neon);
-    border-radius: 50%;
-    transform: rotate(0deg);
-    transition: transform 0.5s ease;
-    box-shadow: 0 0 15px var(--nvidia-glow);
+    --gauge-color: var(--nvidia-neon);
+    --gauge-glow: var(--nvidia-glow);
 }
 
 /* AMD Gauge */
@@ -283,13 +289,8 @@
 }
 
 .amd-tile .gauge-ring-progress {
-    border: 3px solid transparent;
-    border-top-color: var(--amd-neon);
-    border-right-color: var(--amd-neon);
-    border-radius: 50%;
-    transform: rotate(0deg);
-    transition: transform 0.5s ease;
-    box-shadow: 0 0 15px var(--amd-glow);
+    --gauge-color: var(--amd-neon);
+    --gauge-glow: var(--amd-glow);
 }
 
 /* Gauge Center Content */
