@@ -65,6 +65,9 @@
             <button id="btn-add-model" class="btn btn-success btn-glow" title="Add a new model configuration">
                 <i class="fa-solid fa-plus"></i>
             </button>
+            <button id="btn-theme-toggle" class="btn btn-secondary" title="Toggle theme: Cyber-Deck / Obsidian Studio">
+                <i class="fa-solid fa-circle-half-stroke"></i>
+            </button>
             <button id="btn-refresh" class="btn btn-secondary" title="Force refresh system state">
                 <i class="fa-solid fa-arrows-rotate"></i>
             </button>
@@ -166,6 +169,22 @@
                 <h2><i class="fa-solid fa-toggle-on neon-glow-icon"></i> LLM MODEL SWITCHBOARD</h2>
                 <div class="switchboard-info">
                     <span class="info-pill" id="switchboard-info-text"><i class="fa-solid fa-circle-info"></i> Single Port: Activating a model auto-stops the previous one. Multi Port: Start multiple models simultaneously.</span>
+                </div>
+            </div>
+
+            <div class="models-toolbar">
+                <div class="models-search-wrap">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <input type="text" id="models-search" placeholder="Filter by name, ID, engine or endpoint..." autocomplete="off" spellcheck="false">
+                    <button id="btn-clear-search" class="models-search-clear" title="Clear filter" type="button"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div class="models-filter-chips" id="models-filter-chips">
+                    <button class="filter-chip active" data-filter="all" type="button">ALL <span class="chip-count" id="count-all">0</span></button>
+                    <button class="filter-chip filter-active-chip" data-filter="active" type="button"><i class="fa-solid fa-circle-dot chip-dot"></i> ACTIVE <span class="chip-count" id="count-active">0</span></button>
+                    <button class="filter-chip" data-filter="rocm" type="button">AMD ROCm</button>
+                    <button class="filter-chip" data-filter="cuda" type="button">NVIDIA</button>
+                    <button class="filter-chip" data-filter="metal" type="button">METAL</button>
+                    <button class="filter-chip" data-filter="cpu" type="button">CPU</button>
                 </div>
             </div>
 
@@ -567,7 +586,7 @@
         </div>
     </div>
 
-    <script src="index.js?v=6"></script>
+    <script src="index.js?v=8"></script>
 
     <!-- PIN Security Overlay -->
     <div id="pin-security-overlay" class="pin-security-overlay hidden">

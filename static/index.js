@@ -48,6 +48,7 @@ const GAUGE_CIRCUMFERENCE = 251;
 document.addEventListener('DOMContentLoaded', () => {
     initUI();
     initPinSecurity(); // Initialize PIN security system
+    initModelsToolbar(); // Search + filter chips for the switchboard
     fetchSystemState(true); // first quick fetch
 
     // Set up continuous state polling (every 2 seconds)
@@ -136,6 +137,16 @@ function initUI() {
         btnCancelRestart.addEventListener('click', () => {
             closeModal('restart-confirm-overlay');
         });
+    }
+
+    // Theme toggle button
+    const btnThemeToggle = document.getElementById('btn-theme-toggle');
+    if (btnThemeToggle) {
+        const icon = btnThemeToggle.querySelector('i');
+        if (icon && document.documentElement.classList.contains('theme-obsidian')) {
+            icon.className = 'fa-solid fa-moon';
+        }
+        btnThemeToggle.addEventListener('click', toggleAppTheme);
     }
 
     // Single port confirmation modal buttons
@@ -255,6 +266,157 @@ function initUI() {
             console.log('[DEBUG] Change PIN button clicked');
             showChangePinScreen();
         });
+    }
+}
+
+/* ======================================== */
+/* Models Toolbar - search + filter chips   */
+/* ======================================== */
+
+// Apply a saved theme before paint to avoid a flash of the default theme.
+function applySavedTheme() {
+    try {
+        if (localStorage.getItem('llamashift_theme') === 'obsidian') {
+            document.documentElement.classList.add('theme-obsidian');
+        }
+    } catch (e) { /* private mode */ }
+}
+applySavedTheme();
+
+// Toggle between Cyber-Deck (default) and Obsidian Studio.
+function toggleAppTheme() {
+    const root = document.documentElement;
+    const isObsidian = root.classList.toggle('theme-obsidian');
+    try { localStorage.setItem('llamashift_theme', isObsidian ? 'obsidian' : 'cyber'); } catch (e) {}
+    const icon = document.querySelector('#btn-theme-toggle i');
+    if (icon) icon.className = isObsidian ? 'fa-solid fa-moon' : 'fa-solid fa-circle-half-stroke';
+}
+
+// Classify a model's engine for the filter chips.
+// Returns a set of keys, e.g. {'rocm':true} or {'rocm':true,'cuda':true} for dual-GPU.
+function getModelEngineKeys(model) {
+    const gpuStr = (model.gpu || '').toLowerCase();
+    const devStr = Array.isArray(model.devices) ? model.devices.join(',').toLowerCase() : (model.device || '').toLowerCase();
+    const keys = {};
+    if (gpuStr.includes('dual') || (devStr.includes('vulkan') && devStr.includes('rocm'))) {
+        keys.rocm = true;
+        keys.cuda = true; // dual = mixed engine
+    } else if (gpuStr.includes('nvidia') || devStr.includes('cuda')) {
+        keys.cuda = true;
+    } else if (gpuStr.includes('amd') || devStr.includes('rocm')) {
+        keys.rocm = true;
+    } else if (gpuStr.includes('metal') || devStr.includes('metal')) {
+        keys.metal = true;
+    } else {
+        keys.cpu = true;
+    }
+    return keys;
+}
+
+function initModelsToolbar() {
+    const searchInput = document.getElementById('models-search');
+    const clearBtn = document.getElementById('btn-clear-search');
+    const chipsContainer = document.getElementById('models-filter-chips');
+    if (!searchInput || !chipsContainer) return;
+
+    searchInput.addEventListener('input', () => {
+        const wrap = searchInput.closest('.models-search-wrap');
+        if (wrap) wrap.classList.toggle('has-value', searchInput.value.length > 0);
+        applyModelFilter();
+    });
+
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            searchInput.value = '';
+            const wrap = searchInput.closest('.models-search-wrap');
+            if (wrap) wrap.classList.remove('has-value');
+            searchInput.focus();
+            applyModelFilter();
+        });
+    }
+
+    chipsContainer.addEventListener('click', (e) => {
+        const chip = e.target.closest('.filter-chip');
+        if (!chip) return;
+        chipsContainer.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        applyModelFilter();
+    });
+}
+
+// Apply the active search text + chip filter to the models grid.
+// Called after every render so new cards respect the current filter.
+function applyModelFilter() {
+    const grid = document.getElementById('models-grid');
+    if (!grid || !appState.models) return;
+
+    const searchInput = document.getElementById('models-search');
+    const chipsContainer = document.getElementById('models-filter-chips');
+    const query = (searchInput ? searchInput.value : '').trim().toLowerCase();
+    const activeChip = chipsContainer ? chipsContainer.querySelector('.filter-chip.active') : null;
+    const filterKey = activeChip ? activeChip.dataset.filter : 'all';
+
+    let visibleCount = 0;
+    let runningCount = 0;
+
+    for (const model of appState.models) {
+        const card = document.getElementById(`card-${model.id}`);
+        if (!card) continue;
+
+        if (model.status === 'running') runningCount++;
+
+        // Text match across name, id, endpoint, desc, engine label, port
+        let matchesQuery = true;
+        if (query) {
+            const engineKeys = getModelEngineKeys(model);
+            const haystack = [
+                model.name, model.id, model.endpoint, model.desc,
+                model.gpu, model.size, model.filename,
+                model.port,
+                engineKeys.rocm ? 'amd rocm' : '',
+                engineKeys.cuda ? 'nvidia cuda' : '',
+                engineKeys.metal ? 'metal' : '',
+                engineKeys.cpu ? 'cpu' : ''
+            ].join(' ').toLowerCase();
+            matchesQuery = haystack.includes(query);
+        }
+
+        // Chip match
+        let matchesFilter = true;
+        if (filterKey !== 'all') {
+            const engineKeys = getModelEngineKeys(model);
+            switch (filterKey) {
+                case 'active': matchesFilter = model.status === 'running'; break;
+                case 'rocm': matchesFilter = !!engineKeys.rocm; break;
+                case 'cuda': matchesFilter = !!engineKeys.cuda; break;
+                case 'metal': matchesFilter = !!engineKeys.metal; break;
+                case 'cpu': matchesFilter = !!engineKeys.cpu; break;
+            }
+        }
+
+        const visible = matchesQuery && matchesFilter;
+        card.style.display = visible ? '' : 'none';
+        if (visible) visibleCount++;
+    }
+
+    // Keep chip counts live
+    const countAll = document.getElementById('count-all');
+    if (countAll) countAll.textContent = appState.models.length;
+    const countActive = document.getElementById('count-active');
+    if (countActive) countActive.textContent = runningCount;
+
+    // Empty-state hint when the filter hides everything
+    let emptyHint = grid.querySelector('.models-empty-hint');
+    if (visibleCount === 0 && appState.models.length > 0) {
+        if (!emptyHint) {
+            emptyHint = document.createElement('div');
+            emptyHint.className = 'models-empty-hint';
+            grid.appendChild(emptyHint);
+        }
+        emptyHint.textContent = 'No models match this filter.';
+        emptyHint.style.display = 'block';
+    } else if (emptyHint) {
+        emptyHint.style.display = 'none';
     }
 }
 
@@ -843,6 +1005,9 @@ function renderDashboard(forceRender = false) {
             updateModelCardDOM(model);
         });
     }
+
+    // Keep the search/filter toolbar in sync with the new grid state
+    applyModelFilter();
 }
 
 function updateCpuTile(host) {
@@ -1141,6 +1306,36 @@ function createModelCardDOM(model) {
     const isDualGpu = (model.gpu || '').toLowerCase().includes('dual') || (model.gpu || '').toLowerCase().includes('nvidia');
     card.className = `model-card ${isDualGpu ? 'dual-group-card' : 'amd-group-card'}`;
 
+    // Resolve hardware badge dynamically (shared with the toolbar filter chips)
+    let hwLabel = 'CPU (Host)';
+    let hwClass = 'cpu-hw';
+    let hwIcon = 'fa-solid fa-microchip';
+
+    const engineKeys = getModelEngineKeys(model);
+    const gpuStr = (model.gpu || '').toLowerCase();
+
+    if (engineKeys.rocm && engineKeys.cuda) {
+        hwLabel = 'Dual GPU (ROCm+Vulkan)';
+        hwClass = 'dual-hw';
+        hwIcon = 'fa-solid fa-layer-group';
+    } else if (engineKeys.cuda) {
+        hwLabel = model.gpu || 'NVIDIA CUDA';
+        hwClass = 'nvidia-hw';
+        hwIcon = 'fa-solid fa-microchip';
+    } else if (engineKeys.rocm) {
+        hwLabel = model.gpu || 'AMD ROCm';
+        hwClass = 'amd-hw';
+        hwIcon = 'fa-solid fa-microchip';
+    } else if (engineKeys.metal) {
+        hwLabel = 'Apple Metal';
+        hwClass = 'metal-hw';
+        hwIcon = 'fa-brands fa-apple';
+    } else if (model.gpu) {
+        hwLabel = model.gpu;
+        hwClass = gpuStr.includes('nvidia') || gpuStr.includes('cuda') ? 'nvidia-hw' : 'amd-hw';
+        hwIcon = 'fa-solid fa-microchip';
+    }
+
     // Construct display command
     const binary = "./build/bin/llama-server";
     const deviceStr = isDualGpu ? "ROCm0,Vulkan2" : "ROCm0";
@@ -1153,13 +1348,20 @@ function createModelCardDOM(model) {
     }
     const displayCmd = `${binary} \\\n  --model ${modelArg}${mmprojArg} \\\n  --device ${deviceStr} \\\n  ${extraArgsStr} \\\n  --port ${model.port}`;
 
+    const ctxBadge = model.ctxSize ? `<span class="meta-badge ctx-badge" title="Context Size"><i class="fa-solid fa-brain"></i> ${Math.round(model.ctxSize >= 1024 ? model.ctxSize / 1024 : model.ctxSize)}${model.ctxSize >= 1024 ? 'k' : ''} ctx</span>` : '';
+
     card.innerHTML = `
         <div class="model-card-header">
             <div class="model-name-wrapper">
                 <span class="model-name">${escapeHtml(model.name)}</span>
-                <span class="model-endpoint-badge" onclick="copyEndpoint(event, '${escapeHtml(model.endpoint)}')" title="Click to copy endpoint">
-                    <i class="fa-solid fa-link"></i> ${escapeHtml(model.endpoint)}
-                </span>
+                <div class="model-id-endpoint-row">
+                    <span class="model-id-badge" onclick="copyModelId(event, '${escapeHtml(model.id)}')" title="Click to copy Model ID for API requests (OpenAI/v1)">
+                        <i class="fa-solid fa-fingerprint"></i> <span class="id-text">${escapeHtml(model.id)}</span> <i class="fa-regular fa-copy copy-icon"></i>
+                    </span>
+                    <span class="model-endpoint-badge" onclick="copyEndpoint(event, '${escapeHtml(model.endpoint)}')" title="Click to copy endpoint URL">
+                        <i class="fa-solid fa-link"></i> ${escapeHtml(model.endpoint)}
+                    </span>
+                </div>
             </div>
             <span class="model-status-pill status-stopped" id="status-${model.id}">
                 <i class="fa-solid fa-circle"></i> STOPPED
@@ -1168,16 +1370,23 @@ function createModelCardDOM(model) {
         
         <div class="model-meta-row">
             <span class="meta-badge size-badge" title="Model VRAM Footprint"><i class="fa-solid fa-weight-hanging"></i> ${escapeHtml(model.size)}</span>
-            <span class="meta-badge hw-badge ${isDualGpu ? 'dual-hw' : 'amd-hw'}" title="Hardware Engine">
-                <i class="${isDualGpu ? 'fa-solid fa-layer-group' : 'fa-solid fa-microchip'}"></i> 
-                ${isDualGpu ? 'Dual GPU (ROCm+Vulkan)' : 'AMD R9700 (ROCm)'}
+            <span class="meta-badge hw-badge ${hwClass}" title="Hardware Engine">
+                <i class="${hwIcon}"></i> ${escapeHtml(hwLabel)}
             </span>
+            ${ctxBadge}
         </div>
         
         <div class="model-desc">${escapeHtml(model.desc)}</div>
 
-        <div class="model-command-preview" id="cmd-${model.id}" title="Execution command">
-            ${escapeHtml(displayCmd)}
+        <div class="model-command-inspector" id="cmdwrap-${model.id}">
+            <button class="cmd-inspect-btn" type="button" onclick="toggleCommandInspector('${escapeHtml(model.id)}', this)" aria-expanded="false">
+                <i class="fa-solid fa-chevron-right cmd-chevron"></i>
+                <i class="fa-solid fa-terminal"></i> INSPECT COMMAND
+                <span class="cmd-port-chip">:port ${model.port}</span>
+            </button>
+            <div class="model-command-preview" id="cmd-${model.id}" title="Execution command" style="display: none;">
+                ${escapeHtml(displayCmd)}
+            </div>
         </div>
 
         <div class="model-process-stats" id="stats-${model.id}" style="display: none;">
@@ -1204,8 +1413,11 @@ function createModelCardDOM(model) {
             <button class="btn btn-secondary btn-config" onclick="openModelEditConfig('${escapeHtml(model.id)}')" title="Edit model configuration">
                 <i class="fa-solid fa-gear"></i> CONFIG
             </button>
-            <button class="btn btn-secondary btn-logs" onclick="openConsole('${escapeHtml(model.id)}')">
+            <button class="btn btn-secondary btn-logs" onclick="openConsole('${escapeHtml(model.id)}')" title="View runtime logs">
                 <i class="fa-solid fa-terminal"></i> LOGS
+            </button>
+            <button class="btn btn-secondary btn-chat" id="btn-chat-${model.id}" onclick="launchPlaygroundForModel('${escapeHtml(model.id)}')" title="Test model in Chat Playground" style="display: none;">
+                <i class="fa-solid fa-comments"></i> CHAT
             </button>
             <button class="btn btn-start" id="btn-toggle-${model.id}" onclick="toggleModel('${escapeHtml(model.id)}')">
                 <i class="fa-solid fa-play"></i> START SERVER
@@ -1223,18 +1435,20 @@ function updateModelCardDOM(model) {
     const statusPill = document.getElementById(`status-${model.id}`);
     const statsBox = document.getElementById(`stats-${model.id}`);
     const uptimeRow = document.getElementById(`uptime-row-${model.id}`);
-    const cmdPreview = document.getElementById(`cmd-${model.id}`);
+    const cmdWrap = document.getElementById(`cmdwrap-${model.id}`);
 
     const pidVal = document.getElementById(`pid-${model.id}`);
     const cpuVal = document.getElementById(`cpu-${model.id}`);
     const memVal = document.getElementById(`mem-${model.id}`);
     const uptimeVal = document.getElementById(`uptime-${model.id}`);
     const toggleBtn = document.getElementById(`btn-toggle-${model.id}`);
+    const chatBtn = document.getElementById(`btn-chat-${model.id}`);
 
     // Single port mode logic: only one model can run at a time
     const isSinglePort = appState.serverMode === 'single_port';
     const anyRunning = appState.models.some(m => m.status === 'running');
     const isRunning = model.status === 'running';
+    const cmdExpanded = !!_cmdExpandedState[model.id];
 
     if (isRunning) {
         // Model is running (works for both single_port and multi_port modes)
@@ -1246,12 +1460,14 @@ function updateModelCardDOM(model) {
 
         statsBox.style.display = 'grid';
         uptimeRow.style.display = 'flex';
-        cmdPreview.style.display = 'none';
+        if (cmdWrap) cmdWrap.style.display = 'none';
 
         pidVal.textContent = model.pid;
         cpuVal.textContent = `${model.cpu}%`;
         memVal.textContent = `${model.memory}%`;
         uptimeVal.textContent = model.uptime;
+
+        if (chatBtn) chatBtn.style.display = 'inline-flex';
 
         toggleBtn.className = 'btn btn-stop';
         toggleBtn.innerHTML = '<i class="fa-solid fa-stop"></i> STOP SERVER';
@@ -1267,7 +1483,19 @@ function updateModelCardDOM(model) {
 
         statsBox.style.display = 'none';
         uptimeRow.style.display = 'none';
-        cmdPreview.style.display = 'block';
+
+        if (cmdWrap) {
+            cmdWrap.style.display = 'block';
+            const cmdPreview = document.getElementById(`cmd-${model.id}`);
+            const cmdBtn = cmdWrap.querySelector('.cmd-inspect-btn');
+            if (cmdPreview) cmdPreview.style.display = cmdExpanded ? 'block' : 'none';
+            if (cmdBtn) {
+                cmdBtn.setAttribute('aria-expanded', cmdExpanded ? 'true' : 'false');
+                cmdBtn.classList.toggle('expanded', cmdExpanded);
+            }
+        }
+
+        if (chatBtn) chatBtn.style.display = 'none';
 
         toggleBtn.className = 'btn btn-start';
         toggleBtn.innerHTML = '<i class="fa-solid fa-play"></i> START SERVER';
@@ -1278,16 +1506,64 @@ function updateModelCardDOM(model) {
 }
 
 // Copy utilities
+
+// Expanded-state for the "Inspect Command" accordions, keyed by model id.
+// Kept at module scope (not on the model object) because appState.models is
+// replaced with fresh objects on every poll, which would forget the choice.
+const _cmdExpandedState = {};
+
+// Toggle the collapsible "Inspect Command" accordion on a model card.
+function toggleCommandInspector(modelId, btn) {
+    const cmdPreview = document.getElementById(`cmd-${modelId}`);
+    if (!cmdPreview) return;
+    const nowExpanded = cmdPreview.style.display === 'none';
+    cmdPreview.style.display = nowExpanded ? 'block' : 'none';
+    _cmdExpandedState[modelId] = nowExpanded;
+    if (btn) {
+        btn.setAttribute('aria-expanded', nowExpanded ? 'true' : 'false');
+        btn.classList.toggle('expanded', nowExpanded);
+    }
+}
 function copyEndpoint(e, endpoint) {
+    e.stopPropagation();
     const badge = e.target.closest('.model-endpoint-badge');
+    if (!badge) return;
     navigator.clipboard.writeText(endpoint).then(() => {
         // Simple micro glow-toast
         const oldHtml = badge.innerHTML;
-        badge.innerHTML = '<i class="fa-solid fa-check" style="color: var(--nvidia-neon);"></i> COPIED!';
+        badge.innerHTML = '<i class="fa-solid fa-check" style="color: var(--status-online);"></i> COPIED!';
         setTimeout(() => {
             badge.innerHTML = oldHtml;
         }, 1200);
     });
+}
+
+function copyModelId(e, modelId) {
+    e.stopPropagation();
+    const badge = e.target.closest('.model-id-badge');
+    if (!badge) return;
+    navigator.clipboard.writeText(modelId).then(() => {
+        const oldHtml = badge.innerHTML;
+        badge.innerHTML = '<i class="fa-solid fa-check" style="color: var(--status-online);"></i> COPIED ID!';
+        badge.classList.add('copied');
+        setTimeout(() => {
+            badge.innerHTML = oldHtml;
+            badge.classList.remove('copied');
+        }, 1200);
+    }).catch(err => {
+        console.error('Failed to copy model ID:', err);
+    });
+}
+
+function launchPlaygroundForModel(modelId) {
+    const drawer = document.getElementById('playground-drawer');
+    if (drawer) drawer.classList.add('open');
+    updateChatModelDropdown();
+    const select = document.getElementById('chat-model-select');
+    if (select) {
+        select.value = modelId;
+        handleChatModelChange();
+    }
 }
 
 // Controller functions

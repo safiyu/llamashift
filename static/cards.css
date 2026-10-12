@@ -9,6 +9,241 @@
     gap: 1rem;
 }
 
+/* ======================================== */
+/* Models Toolbar - search + filter chips   */
+/* ======================================== */
+.models-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.models-search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1 1 260px;
+    max-width: 380px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    transition: var(--transition-quick);
+}
+
+.models-search-wrap:focus-within {
+    border-color: var(--amd-neon);
+    box-shadow: 0 0 0 3px rgba(0, 243, 255, 0.08);
+}
+
+.models-search-wrap > .fa-magnifying-glass {
+    position: absolute;
+    left: 0.7rem;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    pointer-events: none;
+}
+
+.models-search-wrap input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    padding: 0.5rem 2.2rem 0.5rem 2rem;
+    letter-spacing: 0.3px;
+}
+
+.models-search-wrap input::placeholder {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    letter-spacing: 0;
+}
+
+.models-search-clear {
+    position: absolute;
+    right: 0.45rem;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.65rem;
+    padding: 0.3rem;
+    border-radius: 4px;
+    transition: var(--transition-quick);
+    opacity: 0;
+    visibility: hidden;
+}
+
+.models-search-wrap:focus-within .models-search-clear,
+.models-search-wrap.has-value .models-search-clear {
+    opacity: 1;
+    visibility: visible;
+}
+
+.models-search-clear:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.models-filter-chips {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    font-family: var(--font-sans);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: var(--transition-quick);
+    white-space: nowrap;
+}
+
+.filter-chip .chip-count {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.05rem 0.35rem;
+    border-radius: 999px;
+    min-width: 1.2rem;
+    text-align: center;
+}
+
+.filter-chip:hover {
+    border-color: var(--glass-border-glow);
+    color: var(--text-primary);
+    transform: translateY(-1px);
+}
+
+.filter-chip.active {
+    border-color: rgba(0, 243, 255, 0.4);
+    color: var(--amd-neon);
+    background: rgba(0, 243, 255, 0.06);
+    box-shadow: 0 0 12px rgba(0, 243, 255, 0.1);
+}
+
+.filter-chip.active .chip-count {
+    color: var(--amd-neon);
+    background: rgba(0, 243, 255, 0.1);
+}
+
+.filter-active-chip.active {
+    border-color: rgba(0, 255, 136, 0.4);
+    color: var(--status-online);
+    background: rgba(0, 255, 136, 0.06);
+    box-shadow: 0 0 12px rgba(0, 255, 136, 0.1);
+}
+
+.filter-active-chip.active .chip-count {
+    color: var(--status-online);
+    background: rgba(0, 255, 136, 0.1);
+}
+
+.filter-active-chip .chip-dot {
+    color: var(--status-online);
+    font-size: 0.5rem;
+}
+
+/* Empty state when a filter hides every card */
+.models-empty-hint {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    letter-spacing: 1px;
+    padding: 2.5rem 1rem;
+    border: 1px dashed var(--glass-border);
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.01);
+}
+
+/* ======================================== */
+/* Collapsible command inspector            */
+/* ======================================== */
+.model-command-inspector {
+    margin-bottom: 0.4rem;
+}
+
+.cmd-inspect-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px dashed var(--glass-border);
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    font-family: var(--font-sans);
+    padding: 0.4rem 0.6rem;
+    cursor: pointer;
+    transition: var(--transition-quick);
+    text-align: left;
+}
+
+.cmd-inspect-btn:hover {
+    color: var(--text-secondary);
+    border-color: var(--glass-border-glow);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.cmd-inspect-btn .cmd-chevron {
+    font-size: 0.5rem;
+    transition: transform 0.2s ease;
+}
+
+.cmd-inspect-btn.expanded {
+    border-style: solid;
+    border-color: rgba(0, 243, 255, 0.2);
+    color: var(--amd-neon);
+    background: rgba(0, 243, 255, 0.03);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    margin-bottom: 0;
+}
+
+.cmd-inspect-btn.expanded .cmd-chevron {
+    transform: rotate(90deg);
+}
+
+.cmd-port-chip {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.04);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    letter-spacing: 0;
+}
+
+.model-command-inspector .model-command-preview {
+    display: none;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    margin-top: 0;
+    margin-bottom: 0.4rem;
+}
+
 /* Model Card Section */
 .model-card-section {
     margin-top: 2rem;
@@ -36,8 +271,8 @@
 }
 
 .model-card.running-card {
-    border-color: rgba(0, 255, 136, 0.2);
-    box-shadow: 0 0 20px rgba(0, 255, 136, 0.05);
+    border-color: rgba(0, 255, 136, 0.25);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), 0 0 20px rgba(0, 255, 136, 0.08);
 }
 
 .model-card.running-card:before {
@@ -49,6 +284,12 @@
     height: 2px;
     background: linear-gradient(90deg, transparent, var(--status-online), transparent);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    animation: running-border-pulse 3s ease-in-out infinite;
+}
+
+@keyframes running-border-pulse {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1; filter: drop-shadow(0 0 4px var(--status-online)); }
 }
 
 /* Switching card state (single port mode - ready to switch) */
@@ -181,8 +422,26 @@
 
 .hw-badge.dual-hw {
     color: var(--nvidia-neon);
-    border-color: rgba(118, 185, 0, 0.15);
-    background: rgba(118, 185, 0, 0.02);
+    border-color: rgba(118, 185, 0, 0.25);
+    background: linear-gradient(90deg, rgba(0, 243, 255, 0.05), rgba(118, 185, 0, 0.05));
+}
+
+.hw-badge.nvidia-hw {
+    color: var(--nvidia-neon);
+    border-color: rgba(118, 185, 0, 0.2);
+    background: rgba(118, 185, 0, 0.03);
+}
+
+.hw-badge.metal-hw {
+    color: #e2e8f0;
+    border-color: rgba(226, 232, 240, 0.2);
+    background: rgba(226, 232, 240, 0.03);
+}
+
+.hw-badge.cpu-hw {
+    color: var(--cpu-neon);
+    border-color: rgba(181, 126, 255, 0.2);
+    background: rgba(181, 126, 255, 0.03);
 }
 
 .model-desc {
@@ -232,27 +491,76 @@
 .model-name-wrapper {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.35rem;
     flex: 1;
 }
 
 .model-name {
-    font-size: 0.9rem;
+    font-size: 0.92rem;
     font-weight: 800;
     color: var(--text-primary);
-    line-height: 1.2;
+    line-height: 1.25;
+}
+
+/* Row containing both Model ID and Endpoint badges */
+.model-id-endpoint-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-top: 0.15rem;
+}
+
+/* Model ID Badge (API identifier with 1-click copy) */
+.model-id-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    background: rgba(181, 126, 255, 0.08);
+    border: 1px solid rgba(181, 126, 255, 0.22);
+    color: var(--cpu-neon);
+    cursor: pointer;
+    transition: var(--transition-quick);
+    user-select: none;
+    letter-spacing: 0.3px;
+    width: fit-content;
+}
+
+.model-id-badge:hover {
+    background: rgba(181, 126, 255, 0.18);
+    border-color: var(--cpu-neon);
+    box-shadow: 0 0 10px rgba(181, 126, 255, 0.25);
+    color: #fff;
+    transform: translateY(-1px);
+}
+
+.model-id-badge.copied {
+    border-color: var(--status-online);
+    background: rgba(0, 255, 136, 0.12);
+    color: var(--status-online);
+}
+
+.model-id-badge .copy-icon {
+    font-size: 0.6rem;
+    opacity: 0.7;
+    margin-left: 1px;
 }
 
 .model-endpoint-badge {
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
+    padding: 0.2rem 0.55rem;
+    border-radius: var(--radius-sm);
     font-size: 0.65rem;
     font-family: var(--font-mono);
     background: rgba(0, 243, 255, 0.04);
-    border: 1px solid rgba(0, 243, 255, 0.1);
+    border: 1px solid rgba(0, 243, 255, 0.12);
     color: var(--text-muted);
     cursor: pointer;
     transition: var(--transition-quick);
@@ -261,9 +569,11 @@
 }
 
 .model-endpoint-badge:hover {
-    background: rgba(0, 243, 255, 0.08);
-    border-color: rgba(0, 243, 255, 0.2);
-    color: var(--text-primary);
+    background: rgba(0, 243, 255, 0.1);
+    border-color: rgba(0, 243, 255, 0.25);
+    color: var(--amd-neon);
+    box-shadow: 0 0 8px rgba(0, 243, 255, 0.15);
+    transform: translateY(-1px);
 }
 
 /* Model status pills */
@@ -287,8 +597,24 @@
 
 .model-status-pill.status-running {
     background: rgba(0, 255, 136, 0.08);
-    border: 1px solid rgba(0, 255, 136, 0.2);
+    border: 1px solid rgba(0, 255, 136, 0.25);
     color: var(--status-online);
+    box-shadow: 0 0 10px rgba(0, 255, 136, 0.08);
+}
+
+.model-status-pill.status-running i {
+    animation: status-beacon 1.8s ease-in-out infinite;
+}
+
+@keyframes status-beacon {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.4;
+        transform: scale(0.85);
+    }
 }
 
 .model-status-pill.status-loading {
@@ -433,8 +759,33 @@
     padding: 0 0.8rem;
 }
 
+.model-card-actions .btn-chat {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 0 0.8rem;
+    background: rgba(181, 126, 255, 0.08);
+    color: var(--cpu-neon);
+    border-color: rgba(181, 126, 255, 0.25);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.model-card-actions .btn-chat:hover {
+    background: rgba(181, 126, 255, 0.2);
+    border-color: var(--cpu-neon);
+    box-shadow: 0 0 10px rgba(181, 126, 255, 0.25);
+    color: #fff;
+}
+
 .model-card-actions .btn-start {
     flex: 1;
+}
+
+/* Tabular digits to prevent metric jitter */
+.stat-value,
+.telemetry-highlight {
+    font-variant-numeric: tabular-nums;
 }
 
 /* Config gear button in model card (legacy) */
@@ -450,3 +801,72 @@
     color: var(--amd-neon);
     border-color: var(--amd-neon);
 }
+
+/* ======================================== */
+/* Theme: Modern Obsidian Studio            */
+/* Activated via <html class="theme-obsidian"> */
+/* Monochromatic, low-noise, Linear/Vercel feel. */
+/* ======================================== */
+html.theme-obsidian {
+    --bg-deepest: #0a0b10;
+    --bg-deep: #0c0d13;
+    --bg-primary: #0e0f16;
+    --bg-secondary: #111219;
+    --bg-card: #15161e;
+    --bg-dim: #191a23;
+    --bg-dimmer: #1d1e28;
+
+    --surface-base: rgba(21, 22, 30, 0.72);
+    --surface-hover: rgba(26, 27, 36, 0.85);
+    --glass-bg: rgba(14, 15, 22, 0.72);
+    --glass-bg-heavy: rgba(10, 11, 16, 0.88);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-border-glow: rgba(255, 255, 255, 0.16);
+
+    --text-primary: #f2f2f5;
+    --text-secondary: #c7c7d1;
+    --text-muted: #8a8a96;
+
+    /* Desaturated, restrained accents */
+    --amd-neon: #7dd3fc;
+    --amd-glow: rgba(125, 211, 252, 0.15);
+    --nvidia-neon: #a3e635;
+    --nvidia-glow: rgba(163, 230, 53, 0.15);
+    --cpu-neon: #c4b5fd;
+    --cpu-glow: rgba(196, 181, 253, 0.15);
+    --ram-neon: #5eead4;
+    --ram-glow: rgba(94, 234, 212, 0.15);
+    --amber-neon: #fbbf24;
+    --amber-glow: rgba(251, 191, 36, 0.15);
+    --rose-neon: #fb7185;
+    --rose-glow: rgba(251, 113, 133, 0.15);
+    --blue-neon: #60a5fa;
+    --blue-glow: rgba(96, 165, 250, 0.15);
+
+    --status-online: #34d399;
+    --status-offline: #f87171;
+    --status-loading: #60a5fa;
+
+    --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* Tame the ambient neon wash + grid in Obsidian mode */
+html.theme-obsidian .glow-overlay {
+    opacity: 0.08;
+}
+
+html.theme-obsidian .model-card.running-card {
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.35);
+}
+
+html.theme-obsidian .model-card.running-card:before {
+    animation: none;
+    opacity: 1;
+    filter: none;
+}
+
+html.theme-obsidian .model-status-pill.status-running i {
+    animation: none;
+    opacity: 1;
+}
+
