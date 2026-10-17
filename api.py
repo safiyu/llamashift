@@ -19,6 +19,7 @@ import urllib.parse
 import uuid
 
 import proxy
+from version import __version__, API_VERSION
 
 from config import (
     DEFAULT_RUNTIME_PARAMS, HAS_SYSTEMD, IS_DOCKER, IS_WINDOWS,
@@ -81,7 +82,7 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     # Routes that stay open when managementApiKey is set: liveness and the PIN login flow.
-    AUTH_EXEMPT_PATHS = ("/api/health", "/api/pin", "/api/pin/status")
+    AUTH_EXEMPT_PATHS = ("/api/health", "/api/version", "/api/pin", "/api/pin/status")
 
     def _management_auth_ok(self, path):
         """Gate /api/* behind the optional managementApiKey (Bearer, X-API-Key or a valid PIN session)."""
@@ -173,6 +174,8 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/health":
             self.handle_api_health()
+        elif path == "/api/version":
+            self.handle_api_version()
         elif path == "/api/active":
             self.handle_api_active()
         elif path == "/api/status":
@@ -871,17 +874,25 @@ class SwitcherAPIHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error_response(400, "Invalid action. Use 'start' or 'stop'")
 
+    def handle_api_version(self):
+        """Release and management-API versions; clients check apiVersion for compatibility."""
+        self.send_json_response({"version": __version__, "apiVersion": API_VERSION})
+
     def handle_api_health(self):
         if is_server_ready():
             self.send_json_response({
                 "status": "ok",
                 "message": "LlamaShift server is running",
+                "version": __version__,
+                "apiVersion": API_VERSION,
             })
         else:
             self.send_json_response({
                 "status": "starting",
                 "message": "Server is initializing",
                 "error": "Server starting",
+                "version": __version__,
+                "apiVersion": API_VERSION,
             }, code=503)
 
     # ─── Model lifecycle handlers ────────────────────────────────────────

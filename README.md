@@ -101,6 +101,17 @@ The installers handle these automatically:
 
 ---
 
+## Install with pip
+
+```bash
+pip install git+https://github.com/safiyu/llamashift.git
+llamashift            # dashboard on http://localhost:8002
+llamashift --version  # release and management-API version
+```
+
+An installed copy keeps its `config.json`, logs and PIN state in `~/.llamashift` (override with `LLAMASHIFT_HOME`).
+Running from a checkout with `python server.py`, or as a system service via the installers below, is unchanged.
+
 ## Quick Start
 
 ### Option A: Interactive Installer (Recommended)
@@ -347,6 +358,11 @@ The gateway works on top of whichever port model you choose above — it does **
 ---
 
 ## API Endpoints
+
+### Versioning
+
+`GET /api/version` returns `{"version": "x.y.z", "apiVersion": N}` without authentication, and `/api/health` carries the same fields.
+`apiVersion` only changes on breaking changes to the `/api/*` contract. Clients such as kontexta-cli check it for compatibility.
 
 ### OpenAI Gateway
 
